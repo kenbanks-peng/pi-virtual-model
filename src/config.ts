@@ -30,7 +30,7 @@ function defaultConfig(): VirtualModelConfig {
       { id: "balanced", model: "gpt-6.1-sol", thinkingLevel: "medium", description: "General tasks that need moderate reasoning." },
       { id: "deep", model: "gpt-6-astra", thinkingLevel: "medium", description: "Complex tasks that need careful reasoning." },
     ],
-    fallback: "balanced", apiKey: ["printenv", "TYPESAFE_AI_KEY"],
+    fallback: "balanced", apiKey: ["printenv", "TYPESAFE_API_KEY"],
   };
 }
 

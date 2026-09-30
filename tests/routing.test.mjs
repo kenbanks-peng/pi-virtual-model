@@ -8,10 +8,10 @@ import virtualModelExtension from "../.test-build/index.js";
 function setup({ key = "test-key", decision = "balanced", configuredKey } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pi-virtual-model-test-"));
   const oldDir = process.env.PI_CODING_AGENT_DIR;
-  const oldKey = process.env.TYPESAFE_AI_KEY;
+  const oldKey = process.env.TYPESAFE_API_KEY;
   process.env.PI_CODING_AGENT_DIR = dir;
-  if (key === null) delete process.env.TYPESAFE_AI_KEY;
-  else process.env.TYPESAFE_AI_KEY = key;
+  if (key === null) delete process.env.TYPESAFE_API_KEY;
+  else process.env.TYPESAFE_API_KEY = key;
   const configDir = join(dir, "extensions", "pi-virtual-model");
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(configDir, "config.toml"), `
@@ -63,8 +63,8 @@ description = "Complex tasks"
       globalThis.fetch = originalFetch;
       if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = oldDir;
-      if (oldKey === undefined) delete process.env.TYPESAFE_AI_KEY;
-      else process.env.TYPESAFE_AI_KEY = oldKey;
+      if (oldKey === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = oldKey;
       rmSync(dir, { recursive: true, force: true });
     },
   };

@@ -8,7 +8,7 @@ A phase-based virtual model router for Pi:
 
 The extension uses [TypeSafe's official Jev API](https://docs.typesafe.ai/api): `POST https://api.typesafe.ai/v1/systemone`, model `jev-latest`, and a Choice question for routing. Obtain a key from [TypeSafe](https://console.typesafe.ai).
 
-Set `[routing].api_key` to a literal string or a command array that returns the TypeSafe key, for example `api_key = ["fnox", "get", "THE-KEY"]`. The default command reads the `TYPESAFE_AI_KEY` environment variable. The command runs when Jev classifies a request. Each option’s thinking level controls its model’s reasoning effort.
+Set `[routing].api_key` to a literal string or a command array that returns the TypeSafe key, for example `api_key = ["fnox", "get", "THE-KEY"]`. The default command reads the `TYPESAFE_API_KEY` environment variable. The command runs when Jev classifies a request. Each option’s thinking level controls its model’s reasoning effort.
 
 On first load, the extension creates its global configuration at
 `$PI_CODING_AGENT_DIR/extensions/pi-virtual-model/config.toml`. When
@@ -26,7 +26,7 @@ id = "auto"
 name = "Auto"
 
 [routing]
-api_key = ["printenv", "TYPESAFE_AI_KEY"]
+api_key = ["printenv", "TYPESAFE_API_KEY"]
 fallback = "balanced"
 
 [routing.quick]
