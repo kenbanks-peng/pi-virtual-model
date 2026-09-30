@@ -1,0 +1,25 @@
+# pi-virtual-model configuration
+#
+# Pi deploys this file to:
+#   $PI_CODING_AGENT_DIR/extensions/pi-virtual-model/config.toml
+# or, when PI_CODING_AGENT_DIR is not set:
+#   ~/.pi/agent/extensions/pi-virtual-model/config.toml
+
+[virtual_model]
+provider = "openai-codex"
+id = "auto"
+name = "Auto"
+thinking_levels = ["low", "medium", "high", "xhigh"]
+
+[routing]
+off_model = "gpt-5.6-terra"
+minimal_model = "gpt-5.6-terra"
+low_model = "gpt-5.6-luna"
+medium_model = "gpt-5.6-terra"
+high_model = "gpt-5.6-sol"
+xhigh_model = "gpt-5.6-sol"
+max_model = "gpt-5.6-sol"
+direct_model = "gpt-5.6-luna"
+direct_thinking_level = "medium"
+continuation_fallback_thinking_level = "medium"
+retry_fallback_thinking_level = "medium"

@@ -1,0 +1,22 @@
+{
+  "name": "@npm-ken/pi-virtual-model",
+  "version": "0.1.0",
+  "description": "A cost-aware virtual model router for Pi",
+  "type": "module",
+  "keywords": ["pi-package", "pi-extension", "virtual-model", "model-router"],
+  "files": ["src", "config.toml"],
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "prepack": "pnpm typecheck"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.99.0",
+    "typescript": "^5.9.3"
+  }
+}
