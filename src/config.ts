@@ -38,7 +38,7 @@ function defaultConfig(): VirtualModelConfig {
     complexModel: "gpt-6-astra",
     directModel: "gpt-6-luna",
     directThinkingLevel: "medium",
-    apiKey: ["printenv", "JEV_API_KEY"],
+    apiKey: ["printenv", "TYPESAFE_AI_KEY"],
   };
 }
 

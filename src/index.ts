@@ -64,8 +64,8 @@ function getJevApiKey(configuredKey?: string | string[]): string {
     }
     throw new Error("pi-virtual-model: Jev api_key command returned an empty value");
   }
-  const key = process.env.JEV_API_KEY;
-  if (!key) throw new Error("pi-virtual-model: Jev API key is missing; set JEV_API_KEY or configure [jev].api_key");
+  const key = process.env.TYPESAFE_AI_KEY;
+  if (!key) throw new Error("pi-virtual-model: Jev API key is missing; set TYPESAFE_AI_KEY or configure [jev].api_key");
   return key;
 }
 
@@ -80,28 +80,32 @@ async function classifyRoute(request: Request, configuredKey: string | string[] 
     },
     signal: request.signal,
     body: JSON.stringify({
-      task: [
-        `Classify this latest user request by difficulty. Return the candidate that best fits the work requested.\nLatest request:\n${lastUserText(request.messages).slice(0, MAX_CLASSIFIER_TEXT)}`,
-        recentContext(request.messages) ? `\nRecent context:\n${recentContext(request.messages)}` : "",
-      ].join(""),
-      candidates: [
-        ...(["simple", "standard", "complex"] as const).flatMap((difficulty) =>
-          thinkingLevels.map((thinkingLevel) => ({
-            id: `${difficulty}:${thinkingLevel}`,
-            description: `${difficulty} task with ${thinkingLevel} thinking. Choose thinking effort based on the reasoning depth needed, not task size alone.`,
-          })),
-        ),
-      ],
-
-      priorities: ["quality", "task_fit", "latency", "cost"],
-      stakes: "Choose the least demanding candidate that can complete the request reliably.",
+      model: "jev-latest",
+      state: {
+        latest_request: lastUserText(request.messages).slice(0, MAX_CLASSIFIER_TEXT),
+        recent_context: recentContext(request.messages),
+      },
+      questions: {
+        route: {
+          type: "choice",
+          instructions: "Classify the latest_request by difficulty and reasoning depth, using recent_context for context. Choose the least demanding candidate that can complete the request reliably. Prioritize quality and task fit, then latency and cost. Choose thinking effort based on the reasoning depth needed, not task size alone.",
+          criteria: Object.fromEntries(
+            (["simple", "standard", "complex"] as const).flatMap((difficulty) =>
+              thinkingLevels.map((thinkingLevel) => [
+                `${difficulty}:${thinkingLevel}`,
+                `${difficulty} task with ${thinkingLevel} thinking.`,
+              ]),
+            ),
+          ),
+        },
+      },
     }),
   };
   let response: Response;
   for (let attempt = 0; ; attempt += 1) {
     request.signal?.throwIfAborted();
-    response = await fetch("https://www.jevai.org/api/v1/decisions/model-route", options);
-    if (![502, 503, 504].includes(response.status)) break;
+    response = await fetch("https://api.typesafe.ai/v1/systemone", options);
+    if (![429, 502, 503, 504, 529].includes(response.status)) break;
     await response.body?.cancel();
     request.signal?.throwIfAborted();
     if (attempt === 2) return undefined;
@@ -111,8 +115,12 @@ async function classifyRoute(request: Request, configuredKey: string | string[] 
 
   const payload: unknown = await response.json();
   if (!payload || typeof payload !== "object") throw new Error("pi-virtual-model: Jev returned an invalid response");
-  const data = (payload as { data?: unknown }).data;
-  const selected = data && typeof data === "object" ? (data as { decision?: unknown }).decision : undefined;
+  const answers = (payload as { answers?: unknown }).answers;
+  const route = answers && typeof answers === "object" ? (answers as { route?: unknown }).route : undefined;
+  if (!route || typeof route !== "object" || (route as { type?: unknown }).type !== "choice") {
+    throw new Error("pi-virtual-model: Jev returned an invalid route answer");
+  }
+  const selected = (route as { choice?: unknown }).choice;
   if (typeof selected !== "string") {
     throw new Error(`pi-virtual-model: Jev returned an unknown model candidate: ${String(selected)}`);
   }

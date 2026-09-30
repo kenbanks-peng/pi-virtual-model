@@ -8,10 +8,10 @@ import virtualModelExtension from "../.test-build/index.js";
 function setup({ key = "test-key", decision = "standard", configuredKey } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pi-virtual-model-test-"));
   const oldDir = process.env.PI_CODING_AGENT_DIR;
-  const oldKey = process.env.JEV_API_KEY;
+  const oldKey = process.env.TYPESAFE_AI_KEY;
   process.env.PI_CODING_AGENT_DIR = dir;
-  if (key === null) delete process.env.JEV_API_KEY;
-  else process.env.JEV_API_KEY = key;
+  if (key === null) delete process.env.TYPESAFE_AI_KEY;
+  else process.env.TYPESAFE_AI_KEY = key;
   const configDir = join(dir, "extensions", "pi-virtual-model");
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(configDir, "config.toml"), `
@@ -41,7 +41,11 @@ ${configuredKey ? `[jev]\napi_key = ${JSON.stringify(configuredKey)}\n` : ""}
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options, body: JSON.parse(options.body) });
-    return { ok: true, json: async () => ({ code: 0, data: { decision: decision.includes(":") ? decision : `${decision}:high` } }) };
+    return Response.json({
+      model: "jev-1.13.0",
+      answers: { route: { type: "choice", choice: decision.includes(":") ? decision : `${decision}:high`, confidence: 1, probabilities: {} } },
+      usage: { input_tokens: 100, output_tokens: 20 },
+    });
   };
   const user = { role: "user", content: "Fix the plugin", timestamp: 1 };
   const request = { model: { id: "auto" }, reason: "user", thinkingLevel: "high", messages: [user], signal: new AbortController().signal };
@@ -51,8 +55,8 @@ ${configuredKey ? `[jev]\napi_key = ${JSON.stringify(configuredKey)}\n` : ""}
       globalThis.fetch = originalFetch;
       if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = oldDir;
-      if (oldKey === undefined) delete process.env.JEV_API_KEY;
-      else process.env.JEV_API_KEY = oldKey;
+      if (oldKey === undefined) delete process.env.TYPESAFE_AI_KEY;
+      else process.env.TYPESAFE_AI_KEY = oldKey;
       rmSync(dir, { recursive: true, force: true });
     },
   };
@@ -66,11 +70,37 @@ test("chooses configured models for Jev difficulty", async () => {
       assert.equal(result.model.id, expected);
       assert.equal(result.state.model, expected);
       assert.equal(result.thinkingLevel, "high");
-      assert.match(test.calls[0].url, /api\/v1\/decisions\/model-route$/);
+      assert.equal(test.calls[0].url, "https://api.typesafe.ai/v1/systemone");
       assert.equal(test.calls[0].options.headers.Authorization, "Bearer test-key");
-      assert.ok(test.calls[0].body.candidates.some(candidate => candidate.id === `${decision}:high`));
+      const { body, options } = test.calls[0];
+      assert.equal(options.method, "POST");
+      assert.equal(options.headers["Content-Type"], "application/json");
+      assert.equal(options.signal, test.request.signal);
+      assert.deepEqual(Object.keys(body).sort(), ["model", "questions", "state"]);
+      assert.equal(body.model, "jev-latest");
+      assert.equal(body.state.latest_request, "Fix the plugin");
+      assert.equal(body.questions.route.type, "choice");
+      assert.equal(typeof body.questions.route.instructions, "string");
+      assert.deepEqual(Object.keys(body.questions.route.criteria).sort(),
+        ["simple", "standard", "complex"].flatMap(difficulty =>
+          ["low", "medium", "high", "xhigh"].map(level => `${difficulty}:${level}`)).sort());
+      assert.ok(Object.values(body.questions.route.criteria).every(value => typeof value === "string"));
     } finally { test.restoreFetch(); }
   }
+});
+
+test("rejects malformed or legacy Jev answers", async () => {
+  const fixture = setup();
+  try {
+    for (const payload of [null, {}, { answers: null }, { answers: { route: null } },
+      { answers: { route: { type: "score", choice: "simple:low" } } },
+      { answers: { route: { type: "choice", choice: 1 } } },
+      { answers: { route: { type: "choice", choice: "simple:unsupported" } } },
+      { code: 0, data: { decision: "simple:low" } }]) {
+      globalThis.fetch = async () => Response.json(payload);
+      await assert.rejects(fixture.route(fixture.request), /Jev returned/);
+    }
+  } finally { fixture.restoreFetch(); }
 });
 
 test("resolves a configured command array for the Jev key", async () => {
@@ -175,8 +205,8 @@ test("cancellation during backoff stops Jev retries", async () => {
   } finally { fixture.restoreFetch(); }
 });
 
-test("persistent gateway failures fall back to standard and pin continuations", async () => {
-  for (const status of [502, 503, 504]) {
+test("persistent transient failures fall back to standard and pin continuations", async () => {
+  for (const status of [429, 502, 503, 504, 529]) {
     const fixture = setup();
     let attempts = 0;
     try {

@@ -24,4 +24,4 @@ direct_thinking_level = "medium"
 # Set a literal key or a command array, for example:
 # api_key = ["fnox", "get", "THE-KEY"]
 [jev]
-api_key = ["printenv", "JEV_API_KEY"]
+api_key = ["printenv", "TYPESAFE_AI_KEY"]
