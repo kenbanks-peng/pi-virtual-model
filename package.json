@@ -1,7 +1,7 @@
 {
   "name": "@npm-ken/pi-virtual-model",
-  "version": "0.2.0",
-  "description": "A cost-aware virtual model router for Pi",
+  "version": "0.3.0",
+  "description": "A virtual model router for Pi",
   "type": "module",
   "keywords": ["pi-package", "pi-extension", "virtual-model", "model-router"],
   "files": ["src", "config.toml"],
