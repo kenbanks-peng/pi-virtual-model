@@ -5,6 +5,7 @@ export const ROUTE_ENTRY = "pi-virtual-model:route";
 interface RouteIndicator {
   provider: string;
   model: string;
+  thinkingLevel: string;
 }
 
 // Match pi-bar's model segment: #005b95 background, #cdd6f4 text,
@@ -18,7 +19,7 @@ export function registerRouteIndicator(pi: ExtensionAPI): void {
     const data = entry.data;
     if (!data) return undefined;
     // Model IDs come from configuration. Do not let control characters reach the terminal.
-    const label = `  ${data.provider}:${data.model} `.replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+    const label = `  ${data.provider}:${data.model} · ${data.thinkingLevel} `.replace(/[\x00-\x1f\x7f-\x9f]/g, "");
     return {
       invalidate() {},
       render(width) {
@@ -36,6 +37,7 @@ export function indicateRoute(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   model: { provider: string; id: string },
+  thinkingLevel: string,
 ): void {
   // Use the active branch, not process-local state, so resume and forks work too.
   const branch = ctx.sessionManager.getBranch();
@@ -44,9 +46,9 @@ export function indicateRoute(
     if (entry.type === "message" && entry.message.role === "user") break;
     if (entry.type === "custom" && entry.customType === ROUTE_ENTRY) {
       const previous = entry.data as RouteIndicator | undefined;
-      if (previous?.provider === model.provider && previous.model === model.id) return;
+      if (previous?.provider === model.provider && previous.model === model.id && previous.thinkingLevel === thinkingLevel) return;
       break;
     }
   }
-  pi.appendEntry<RouteIndicator>(ROUTE_ENTRY, { provider: model.provider, model: model.id });
+  pi.appendEntry<RouteIndicator>(ROUTE_ENTRY, { provider: model.provider, model: model.id, thinkingLevel });
 }

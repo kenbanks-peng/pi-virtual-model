@@ -6,17 +6,18 @@ import type {
   ModelRoute,
   ModelRouteRequest,
 } from "@earendil-works/pi-coding-agent";
-import { loadConfig } from "./config.js";
+import { loadConfig, type RouteOption } from "./config.js";
 import { indicateRoute, registerRouteIndicator } from "./indicator.js";
 
 interface RoutingState {
+  optionId: string;
   model: string;
+  thinkingLevel: string;
 }
 
 type Request = ModelRouteRequest<RoutingState>;
 type Message = Request["messages"][number];
-type Difficulty = "simple" | "standard" | "complex";
-type RouteChoice = { difficulty: Difficulty; thinkingLevel: string };
+type RouteChoice = RouteOption;
 const MAX_CLASSIFIER_TEXT = 16_000;
 
 function lastUserText(messages: readonly Message[]): string {
@@ -69,10 +70,10 @@ function getJevApiKey(configuredKey?: string | string[]): string {
   return key;
 }
 
-async function classifyRoute(request: Request, configuredKey: string | string[] | undefined, thinkingLevels: readonly string[]): Promise<RouteChoice | undefined> {
+async function classifyRoute(request: Request, configuredKey: string | string[] | undefined, options: readonly RouteOption[]): Promise<RouteChoice | undefined> {
   const apiKey = getJevApiKey(configuredKey);
 
-  const options: RequestInit = {
+  const fetchOptions: RequestInit = {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -88,15 +89,8 @@ async function classifyRoute(request: Request, configuredKey: string | string[] 
       questions: {
         route: {
           type: "choice",
-          instructions: "Classify the latest_request by difficulty and reasoning depth, using recent_context for context. Choose the least demanding candidate that can complete the request reliably. Prioritize quality and task fit, then latency and cost. Choose thinking effort based on the reasoning depth needed, not task size alone.",
-          criteria: Object.fromEntries(
-            (["simple", "standard", "complex"] as const).flatMap((difficulty) =>
-              thinkingLevels.map((thinkingLevel) => [
-                `${difficulty}:${thinkingLevel}`,
-                `${difficulty} task with ${thinkingLevel} thinking.`,
-              ]),
-            ),
-          ),
+          instructions: "Choose the least demanding option that can complete latest_request reliably. Use recent_context for context. Prioritize quality and task fit, then latency and cost. Consider each option's model, thinking level, and description.",
+          criteria: Object.fromEntries(options.map((option) => [option.id, `${option.description} Model: ${option.model}. Thinking: ${option.thinkingLevel}.`])),
         },
       },
     }),
@@ -104,7 +98,7 @@ async function classifyRoute(request: Request, configuredKey: string | string[] 
   let response: Response;
   for (let attempt = 0; ; attempt += 1) {
     request.signal?.throwIfAborted();
-    response = await fetch("https://api.typesafe.ai/v1/systemone", options);
+    response = await fetch("https://api.typesafe.ai/v1/systemone", fetchOptions);
     if (![429, 502, 503, 504, 529].includes(response.status)) break;
     await response.body?.cancel();
     request.signal?.throwIfAborted();
@@ -124,11 +118,9 @@ async function classifyRoute(request: Request, configuredKey: string | string[] 
   if (typeof selected !== "string") {
     throw new Error(`pi-virtual-model: Jev returned an unknown model candidate: ${String(selected)}`);
   }
-  const [difficulty, thinkingLevel, ...extra] = selected.split(":");
-  if (extra.length || !["simple", "standard", "complex"].includes(difficulty) || !thinkingLevels.includes(thinkingLevel)) {
-    throw new Error(`pi-virtual-model: Jev returned an unknown model candidate: ${selected}`);
-  }
-  return { difficulty: difficulty as Difficulty, thinkingLevel };
+  const option = options.find((candidate) => candidate.id === selected);
+  if (!option) throw new Error(`pi-virtual-model: Jev returned an unknown model candidate: ${selected}`);
+  return option;
 }
 
 export default function virtualModelExtension(pi: ExtensionAPI): void {
@@ -138,22 +130,22 @@ export default function virtualModelExtension(pi: ExtensionAPI): void {
   function routeTo(
     request: Request,
     ctx: ExtensionContext,
-    modelId: string,
+    option: RouteOption,
     state?: RoutingState,
   ): ModelRoute<RoutingState> {
-    const model = ctx.modelRegistry.find(config.provider, modelId);
-    if (!model) throw new Error(`${config.provider}/${modelId} is not available`);
-    if (request.reason !== "retry") indicateRoute(pi, ctx, model);
-    return { model, thinkingLevel: request.thinkingLevel, state };
+    const model = ctx.modelRegistry.find(config.provider, option.model);
+    if (!model) throw new Error(`${config.provider}/${option.model} is not available`);
+    if (request.reason !== "retry") indicateRoute(pi, ctx, model, option.thinkingLevel);
+    return { model, thinkingLevel: option.thinkingLevel as Request["thinkingLevel"], state };
   }
 
   pi.registerVirtualModel<RoutingState>({
     provider: config.provider,
     id: config.id,
     name: config.name,
-    thinkingLevels: config.thinkingLevels,
+    thinkingLevels: [...new Set(config.options.map((option) => option.thinkingLevel))],
     async route(request, ctx) {
-      if (request.reason === "direct") return routeTo(request, ctx, config.directModel);
+      if (request.reason === "direct") return routeTo(request, ctx, config.options.find((option) => option.id === config.directOption)!);
 
       if (request.reason === "retry" && request.failed) {
         return {
@@ -164,20 +156,15 @@ export default function virtualModelExtension(pi: ExtensionAPI): void {
 
       // Route once per user turn. Keep continuations on the chosen physical model.
       if (request.reason !== "user" && request.state) {
-        return routeTo(request, ctx, request.state.model, request.state);
+        const option = config.options.find((candidate) => candidate.id === request.state!.optionId);
+        if (!option) throw new Error(`pi-virtual-model: saved route option is no longer configured: ${request.state.optionId}`);
+        return routeTo(request, ctx, option, request.state);
       }
 
-      const choice = await classifyRoute(request, config.apiKey, config.thinkingLevels);
-      if (!choice) {
-        return routeTo(request, ctx, config.standardModel, { model: config.standardModel });
-      }
-      const modelId = {
-        simple: config.simpleModel,
-        standard: config.standardModel,
-        complex: config.complexModel,
-      }[choice.difficulty];
-      const route = routeTo(request, ctx, modelId, { model: modelId });
-      return { ...route, thinkingLevel: choice.thinkingLevel as Request["thinkingLevel"] };
+      const choice = await classifyRoute(request, config.apiKey, config.options);
+      const option = choice ?? config.options.find((candidate) => candidate.id === config.fallbackOption)!;
+      const state = { optionId: option.id, model: option.model, thinkingLevel: option.thinkingLevel };
+      return routeTo(request, ctx, option, state);
     },
   });
 }

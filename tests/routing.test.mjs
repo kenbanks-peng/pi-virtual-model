@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import virtualModelExtension from "../.test-build/index.js";
 
-function setup({ key = "test-key", decision = "standard", configuredKey } = {}) {
+function setup({ key = "test-key", decision = "balanced", configuredKey } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pi-virtual-model-test-"));
   const oldDir = process.env.PI_CODING_AGENT_DIR;
   const oldKey = process.env.TYPESAFE_AI_KEY;
@@ -18,11 +18,9 @@ function setup({ key = "test-key", decision = "standard", configuredKey } = {}) 
 [virtual_model]
 provider = "openai-codex"
 [routing]
-simple_model = "small"
-standard_model = "medium-model"
-complex_model = "large"
-direct_model = "direct"
-direct_thinking_level = "medium"
+options = ["quick|small|low|Fast tasks", "balanced|medium-model|medium|General tasks", "deep|large|high|Complex tasks"]
+direct_option = "balanced"
+fallback_option = "balanced"
 ${configuredKey ? `[jev]\napi_key = ${JSON.stringify(configuredKey)}\n` : ""}
 `);
   let definition;
@@ -33,7 +31,7 @@ ${configuredKey ? `[jev]\napi_key = ${JSON.stringify(configuredKey)}\n` : ""}
     registerEntryRenderer() {},
     appendEntry(customType, data) { entries.push({ type: "custom", customType, data }); },
   });
-  const models = Object.fromEntries(["small", "medium-model", "large", "direct"].map(id => [id, { id, provider: "openai-codex" }]));
+  const models = Object.fromEntries(["small", "medium-model", "large"].map(id => [id, { id, provider: "openai-codex" }]));
   const ctx = {
     modelRegistry: { find: (provider, id) => provider === "openai-codex" ? models[id] : undefined },
     sessionManager: { getBranch: () => entries },
@@ -43,7 +41,7 @@ ${configuredKey ? `[jev]\napi_key = ${JSON.stringify(configuredKey)}\n` : ""}
     calls.push({ url, options, body: JSON.parse(options.body) });
     return Response.json({
       model: "jev-1.13.0",
-      answers: { route: { type: "choice", choice: decision.includes(":") ? decision : `${decision}:high`, confidence: 1, probabilities: {} } },
+      answers: { route: { type: "choice", choice: decision, confidence: 1, probabilities: {} } },
       usage: { input_tokens: 100, output_tokens: 20 },
     });
   };
@@ -63,13 +61,14 @@ ${configuredKey ? `[jev]\napi_key = ${JSON.stringify(configuredKey)}\n` : ""}
 }
 
 test("chooses configured models for Jev difficulty", async () => {
-  for (const [decision, expected] of [["simple", "small"], ["standard", "medium-model"], ["complex", "large"]]) {
+  for (const [decision, expected] of [["quick", "small"], ["balanced", "medium-model"], ["deep", "large"]]) {
     const test = setup({ decision });
     try {
       const result = await test.route(test.request);
       assert.equal(result.model.id, expected);
       assert.equal(result.state.model, expected);
-      assert.equal(result.thinkingLevel, "high");
+      assert.equal(result.state.thinkingLevel, result.thinkingLevel);
+      assert.equal(result.thinkingLevel, { quick: "low", balanced: "medium", deep: "high" }[decision]);
       assert.equal(test.calls[0].url, "https://api.typesafe.ai/v1/systemone");
       assert.equal(test.calls[0].options.headers.Authorization, "Bearer test-key");
       const { body, options } = test.calls[0];
@@ -81,9 +80,8 @@ test("chooses configured models for Jev difficulty", async () => {
       assert.equal(body.state.latest_request, "Fix the plugin");
       assert.equal(body.questions.route.type, "choice");
       assert.equal(typeof body.questions.route.instructions, "string");
-      assert.deepEqual(Object.keys(body.questions.route.criteria).sort(),
-        ["simple", "standard", "complex"].flatMap(difficulty =>
-          ["low", "medium", "high", "xhigh"].map(level => `${difficulty}:${level}`)).sort());
+      assert.deepEqual(Object.keys(body.questions.route.criteria).sort(), ["balanced", "deep", "quick"]);
+      assert.match(body.questions.route.criteria.quick, /Fast tasks.*small.*low/);
       assert.ok(Object.values(body.questions.route.criteria).every(value => typeof value === "string"));
     } finally { test.restoreFetch(); }
   }
@@ -95,7 +93,7 @@ test("rejects malformed or legacy Jev answers", async () => {
     for (const payload of [null, {}, { answers: null }, { answers: { route: null } },
       { answers: { route: { type: "score", choice: "simple:low" } } },
       { answers: { route: { type: "choice", choice: 1 } } },
-      { answers: { route: { type: "choice", choice: "simple:unsupported" } } },
+      { answers: { route: { type: "choice", choice: "unknown" } } },
       { code: 0, data: { decision: "simple:low" } }]) {
       globalThis.fetch = async () => Response.json(payload);
       await assert.rejects(fixture.route(fixture.request), /Jev returned/);
@@ -112,11 +110,12 @@ test("resolves a configured command array for the Jev key", async () => {
 });
 
 test("classifies each new user message and keeps the selection on continuations", async () => {
-  const test = setup({ decision: "complex" });
+  const test = setup({ decision: "deep" });
   try {
     const selected = await test.route(test.request);
     const next = await test.route({ ...test.request, reason: "continuation", state: selected.state });
     assert.equal(next.model.id, "large");
+    assert.equal(next.thinkingLevel, selected.thinkingLevel);
     assert.equal(test.calls.length, 1);
     await test.route({ ...test.request, reason: "user", messages: [...test.request.messages, { role: "user", content: "Simple question" }] });
     assert.equal(test.calls.length, 2);
@@ -137,7 +136,8 @@ test("direct requests use the configured direct model without classifying", asyn
   const test = setup();
   try {
     const result = await test.route({ ...test.request, reason: "direct" });
-    assert.equal(result.model.id, "direct");
+    assert.equal(result.model.id, "medium-model");
+    assert.equal(result.thinkingLevel, "medium");
     assert.equal(test.calls.length, 0);
   } finally { test.restoreFetch(); }
 });
@@ -205,7 +205,7 @@ test("cancellation during backoff stops Jev retries", async () => {
   } finally { fixture.restoreFetch(); }
 });
 
-test("persistent transient failures fall back to standard and pin continuations", async () => {
+test("persistent transient failures fall back to balanced and pin continuations", async () => {
   for (const status of [429, 502, 503, 504, 529]) {
     const fixture = setup();
     let attempts = 0;
@@ -217,7 +217,7 @@ test("persistent transient failures fall back to standard and pin continuations"
       const result = await fixture.route({ ...fixture.request, thinkingLevel: "low" });
       assert.equal(attempts, 3);
       assert.equal(result.model.id, "medium-model");
-      assert.equal(result.thinkingLevel, "low");
+      assert.equal(result.thinkingLevel, "medium");
       const continuation = await fixture.route({ ...fixture.request, reason: "continuation", state: result.state });
       assert.equal(continuation.model.id, "medium-model");
       assert.equal(attempts, 3);

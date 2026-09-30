@@ -9,19 +9,14 @@
 provider = "openai-codex"
 id = "auto"
 name = "Auto"
-# This controls reasoning effort, not model selection.
-thinking_levels = ["low", "medium", "high", "xhigh"]
-
 [routing]
-# Jev selects a model and thinking level for each new user request.
-simple_model = "gpt-6-luna"
-standard_model = "gpt-6.1-sol"
-complex_model = "gpt-6-astra"
+# Jev selects one complete option for each new user request.
+# Each string is: id|model|thinking_level|description
+options = ["quick|gpt-6-luna|low|Simple questions and small, clear tasks.", "balanced|gpt-6.1-sol|medium|General tasks that need moderate reasoning.", "deep|gpt-6-astra|high|Complex tasks that need careful reasoning."]
 # Requests outside the agent loop, such as compaction summaries.
-direct_model = "gpt-6-luna"
-direct_thinking_level = "medium"
+direct_option = "balanced"
+# Used if Jev is unavailable after retries.
+fallback_option = "balanced"
 
-# Set a literal key or a command array, for example:
-# api_key = ["fnox", "get", "THE-KEY"]
 [jev]
 api_key = ["printenv", "TYPESAFE_AI_KEY"]
