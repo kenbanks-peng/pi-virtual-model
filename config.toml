@@ -13,7 +13,7 @@ name = "Auto"
 thinking_levels = ["low", "medium", "high", "xhigh"]
 
 [routing]
-# Jev selects one model for each new user request, based on task difficulty.
+# Jev selects a model and thinking level for each new user request.
 simple_model = "gpt-6-luna"
 standard_model = "gpt-6-astra"
 complex_model = "gpt-6.1-sol"

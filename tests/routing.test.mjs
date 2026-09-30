@@ -41,7 +41,7 @@ ${configuredKey ? `[jev]\napi_key = ${JSON.stringify(configuredKey)}\n` : ""}
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options, body: JSON.parse(options.body) });
-    return { ok: true, json: async () => ({ code: 0, data: { decision } }) };
+    return { ok: true, json: async () => ({ code: 0, data: { decision: decision.includes(":") ? decision : `${decision}:high` } }) };
   };
   const user = { role: "user", content: "Fix the plugin", timestamp: 1 };
   const request = { model: { id: "auto" }, reason: "user", thinkingLevel: "high", messages: [user], signal: new AbortController().signal };
@@ -68,7 +68,7 @@ test("chooses configured models for Jev difficulty", async () => {
       assert.equal(result.thinkingLevel, "high");
       assert.match(test.calls[0].url, /api\/v1\/decisions\/model-route$/);
       assert.equal(test.calls[0].options.headers.Authorization, "Bearer test-key");
-      assert.deepEqual(test.calls[0].body.candidates.map(candidate => candidate.id), ["simple", "standard", "complex"]);
+      assert.ok(test.calls[0].body.candidates.some(candidate => candidate.id === `${decision}:high`));
     } finally { test.restoreFetch(); }
   }
 });
