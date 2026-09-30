@@ -13,10 +13,15 @@ name = "Auto"
 thinking_levels = ["low", "medium", "high", "xhigh"]
 
 [routing]
-# Start each user message with this model. It plans and makes the first edit.
-planning_model = "gpt-6-astra"
-# After a successful edit or write, use this model for the rest of the turn.
-implementation_model = "gpt-6-luna"
+# Jev selects one model for each new user request, based on task difficulty.
+simple_model = "gpt-6-luna"
+standard_model = "gpt-6-astra"
+complex_model = "gpt-6.1-sol"
 # Requests outside the agent loop, such as compaction summaries.
 direct_model = "gpt-6-luna"
 direct_thinking_level = "medium"
+
+# Set a literal key or a command array, for example:
+# api_key = ["fnox", "get", "THE-KEY"]
+[jev]
+api_key = ["printenv", "JEV_API_KEY"]

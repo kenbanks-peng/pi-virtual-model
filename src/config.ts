@@ -15,12 +15,14 @@ export const THINKING_LEVELS = [
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 export interface VirtualModelConfig {
+  apiKey?: string | string[];
   provider: string;
   id: string;
   name: string;
   thinkingLevels: ThinkingLevel[];
-  planningModel: string;
-  implementationModel: string;
+  simpleModel: string;
+  standardModel: string;
+  complexModel: string;
   directModel: string;
   directThinkingLevel: ThinkingLevel;
 }
@@ -31,10 +33,12 @@ function defaultConfig(): VirtualModelConfig {
     id: "auto",
     name: "Auto",
     thinkingLevels: ["low", "medium", "high", "xhigh"],
-    planningModel: "gpt-6-astra",
-    implementationModel: "gpt-6-luna",
+    simpleModel: "gpt-6-luna",
+    standardModel: "gpt-6-astra",
+    complexModel: "gpt-6.1-sol",
     directModel: "gpt-6-luna",
     directThinkingLevel: "medium",
+    apiKey: ["printenv", "JEV_API_KEY"],
   };
 }
 
@@ -87,6 +91,19 @@ function parseString(raw: string, key: string): string {
   throw new Error(`pi-virtual-model config: ${key} must be a non-empty TOML string`);
 }
 
+function parseApiKey(raw: string): string | string[] {
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (typeof value === "string" && value.trim()) return value;
+    if (Array.isArray(value) && value.length > 0 &&
+        value.every((item) => typeof item === "string" && !item.includes("\0")) &&
+        value[0].trim()) return value;
+  } catch {
+    // Do not include the value in errors: it can contain credentials.
+  }
+  throw new Error("pi-virtual-model config: api_key must be a non-empty string or command array of strings");
+}
+
 function parseThinkingLevel(raw: string, key: string): ThinkingLevel {
   const value = parseString(raw, key);
   if ((THINKING_LEVELS as readonly string[]).includes(value)) return value as ThinkingLevel;
@@ -124,7 +141,7 @@ export function parseConfigToml(source: string): VirtualModelConfig {
     const sectionMatch = /^\[([a-z_]+)]$/.exec(line);
     if (sectionMatch) {
       section = sectionMatch[1];
-      if (section !== "virtual_model" && section !== "routing") {
+      if (section !== "virtual_model" && section !== "routing" && section !== "jev") {
         throw new Error(`pi-virtual-model config: unsupported section [${section}]`);
       }
       continue;
@@ -133,6 +150,12 @@ export function parseConfigToml(source: string): VirtualModelConfig {
     const assignment = /^([a-z_]+)\s*=\s*(.+)$/.exec(line);
     if (!assignment) throw new Error(`pi-virtual-model config: unsupported line: ${sourceLine}`);
     const [, key, raw] = assignment;
+
+    if (section === "jev") {
+      if (key !== "api_key") throw new Error(`pi-virtual-model config: unsupported jev key ${key}`);
+      config.apiKey = parseApiKey(raw);
+      continue;
+    }
 
     if (section === "virtual_model") {
       if (key === "provider") config.provider = parseString(raw, key);
@@ -144,10 +167,12 @@ export function parseConfigToml(source: string): VirtualModelConfig {
     }
 
     if (section === "routing") {
-      if (key === "planning_model") {
-        config.planningModel = parseString(raw, key);
-      } else if (key === "implementation_model") {
-        config.implementationModel = parseString(raw, key);
+      if (key === "simple_model") {
+        config.simpleModel = parseString(raw, key);
+      } else if (key === "standard_model") {
+        config.standardModel = parseString(raw, key);
+      } else if (key === "complex_model") {
+        config.complexModel = parseString(raw, key);
       } else if (key === "direct_model") {
         config.directModel = parseString(raw, key);
       } else if (key === "direct_thinking_level") {

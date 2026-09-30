@@ -11,7 +11,7 @@ test("bundled config and parser defaults agree", () => {
   assert.deepEqual(parseConfigToml(bundled), parseConfigToml(""));
 });
 
-test("reads phase models and thinking levels", () => {
+test("reads Jev key command array, difficulty models, and thinking levels", () => {
   const config = parseConfigToml(`
 [virtual_model]
 provider = "other"
@@ -19,28 +19,36 @@ id = "phased"
 name = "Phased"
 thinking_levels = ["off", "high"]
 [routing]
-planning_model = "strong#model" # comment
-implementation_model = "cheap"
+simple_model = "small"
+standard_model = "strong#model" # comment
+complex_model = "reasoner"
 direct_model = "summary"
 direct_thinking_level = "low"
+[jev]
+api_key = ["fnox", "get", "THE-KEY"]
 `);
   assert.equal(config.provider, "other");
   assert.equal(config.id, "phased");
   assert.equal(config.name, "Phased");
   assert.deepEqual(config.thinkingLevels, ["off", "high"]);
-  assert.equal(config.planningModel, "strong#model");
-  assert.equal(config.implementationModel, "cheap");
+  assert.equal(config.simpleModel, "small");
+  assert.equal(config.standardModel, "strong#model");
+  assert.equal(config.complexModel, "reasoner");
   assert.equal(config.directModel, "summary");
   assert.equal(config.directThinkingLevel, "low");
+  assert.deepEqual(config.apiKey, ["fnox", "get", "THE-KEY"]);
 });
 
 test("rejects unsupported or malformed settings", () => {
   for (const source of [
-    '[routing]\nplanning_model = ""',
-    '[routing]\nimplementation_model = 1',
+    '[routing]\nsimple_model = ""',
+    '[routing]\ncomplex_model = 1',
     '[routing]\ndirect_thinking_level = "invalid"',
     '[virtual_model]\nthinking_levels = []',
     '[routing]\nlow_model = "old"',
+    '[jev]\nunknown = "value"',
+    '[jev]\napi_key = []',
+    '[jev]\napi_key = ["fnox", 4]',
     '[unknown]',
   ]) assert.throws(() => parseConfigToml(source), /pi-virtual-model config:/);
 });
@@ -52,11 +60,11 @@ test("creates the global phase config without replacing user changes", () => {
     ensureGlobalConfig(path);
     assert.equal(readFileSync(path, "utf8"), bundled);
     assert.deepEqual(loadConfig(path), parseConfigToml(bundled));
-    const custom = bundled.replace('planning_model = "gpt-6-astra"', 'planning_model = "custom"');
+    const custom = bundled.replace('standard_model = "gpt-6-astra"', 'standard_model = "custom"');
     writeFileSync(path, custom);
     ensureGlobalConfig(path);
     assert.equal(readFileSync(path, "utf8"), custom);
-    assert.equal(loadConfig(path).planningModel, "custom");
+    assert.equal(loadConfig(path).standardModel, "custom");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
