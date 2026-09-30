@@ -18,10 +18,20 @@ function setup({ key = "test-key", decision = "balanced", configuredKey } = {}) 
 [virtual_model]
 provider = "openai-codex"
 [routing]
-options = ["quick|small|low|Fast tasks", "balanced|medium-model|medium|General tasks", "deep|large|high|Complex tasks"]
-direct_option = "balanced"
-fallback_option = "balanced"
-${configuredKey ? `[jev]\napi_key = ${JSON.stringify(configuredKey)}\n` : ""}
+${configuredKey ? `api_key = ${JSON.stringify(configuredKey)}` : ""}
+fallback = "balanced"
+[routing.quick]
+model = "small"
+thinking_level = "low"
+description = "Fast tasks"
+[routing.balanced]
+model = "medium-model"
+thinking_level = "medium"
+description = "General tasks"
+[routing.deep]
+model = "large"
+thinking_level = "high"
+description = "Complex tasks"
 `);
   let definition;
   const entries = [];
@@ -132,13 +142,13 @@ test("retries stay on the failed model without another Jev call", async () => {
   } finally { test.restoreFetch(); }
 });
 
-test("direct requests use the configured direct model without classifying", async () => {
-  const test = setup();
+test("direct requests use Jev to classify the task", async () => {
+  const test = setup({ decision: "deep" });
   try {
     const result = await test.route({ ...test.request, reason: "direct" });
-    assert.equal(result.model.id, "medium-model");
-    assert.equal(result.thinkingLevel, "medium");
-    assert.equal(test.calls.length, 0);
+    assert.equal(result.model.id, "large");
+    assert.equal(result.thinkingLevel, "high");
+    assert.equal(test.calls.length, 1);
   } finally { test.restoreFetch(); }
 });
 

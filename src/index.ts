@@ -48,29 +48,24 @@ function recentContext(messages: readonly Message[]): string {
   }).filter(Boolean).join("\n").slice(-4_000);
 }
 
-function getJevApiKey(configuredKey?: string | string[]): string {
+function getJevApiKey(configuredKey: string | string[]): string {
   if (typeof configuredKey === "string") return configuredKey;
-  if (configuredKey) {
-    const [command, ...args] = configuredKey;
-    try {
-      const key = execFileSync(command, args, {
-        encoding: "utf8",
-        timeout: 10_000,
-        stdio: ["ignore", "pipe", "ignore"],
-        env: process.env,
-      }).trim();
-      if (key) return key;
-    } catch {
-      throw new Error("pi-virtual-model: Jev api_key command failed");
-    }
-    throw new Error("pi-virtual-model: Jev api_key command returned an empty value");
+  const [command, ...args] = configuredKey;
+  try {
+    const key = execFileSync(command, args, {
+      encoding: "utf8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "ignore"],
+      env: process.env,
+    }).trim();
+    if (key) return key;
+  } catch {
+    throw new Error("pi-virtual-model: Jev api_key command failed");
   }
-  const key = process.env.TYPESAFE_AI_KEY;
-  if (!key) throw new Error("pi-virtual-model: Jev API key is missing; set TYPESAFE_AI_KEY or configure [jev].api_key");
-  return key;
+  throw new Error("pi-virtual-model: Jev api_key command returned an empty value");
 }
 
-async function classifyRoute(request: Request, configuredKey: string | string[] | undefined, options: readonly RouteOption[]): Promise<RouteChoice | undefined> {
+async function classifyRoute(request: Request, configuredKey: string | string[], options: readonly RouteOption[]): Promise<RouteChoice | undefined> {
   const apiKey = getJevApiKey(configuredKey);
 
   const fetchOptions: RequestInit = {
@@ -145,8 +140,6 @@ export default function virtualModelExtension(pi: ExtensionAPI): void {
     name: config.name,
     thinkingLevels: [...new Set(config.options.map((option) => option.thinkingLevel))],
     async route(request, ctx) {
-      if (request.reason === "direct") return routeTo(request, ctx, config.options.find((option) => option.id === config.directOption)!);
-
       if (request.reason === "retry" && request.failed) {
         return {
           model: request.failed.model,
@@ -162,7 +155,7 @@ export default function virtualModelExtension(pi: ExtensionAPI): void {
       }
 
       const choice = await classifyRoute(request, config.apiKey, config.options);
-      const option = choice ?? config.options.find((candidate) => candidate.id === config.fallbackOption)!;
+      const option = choice ?? config.options.find((candidate) => candidate.id === config.fallback)!;
       const state = { optionId: option.id, model: option.model, thinkingLevel: option.thinkingLevel };
       return routeTo(request, ctx, option, state);
     },

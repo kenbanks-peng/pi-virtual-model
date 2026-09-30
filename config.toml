@@ -1,22 +1,23 @@
-# pi-virtual-model configuration
-#
-# Pi deploys this file to:
-#   $PI_CODING_AGENT_DIR/extensions/pi-virtual-model/config.toml
-# or, when PI_CODING_AGENT_DIR is not set:
-#   ~/.pi/agent/extensions/pi-virtual-model/config.toml
-
 [virtual_model]
 provider = "openai-codex"
 id = "auto"
 name = "Auto"
-[routing]
-# Jev selects one complete option for each new user request.
-# Each string is: id|model|thinking_level|description
-options = ["quick|gpt-6-luna|low|Simple questions and small, clear tasks.", "balanced|gpt-6.1-sol|medium|General tasks that need moderate reasoning.", "deep|gpt-6-astra|high|Complex tasks that need careful reasoning."]
-# Requests outside the agent loop, such as compaction summaries.
-direct_option = "balanced"
-# Used if Jev is unavailable after retries.
-fallback_option = "balanced"
 
-[jev]
+[routing]
 api_key = ["printenv", "TYPESAFE_AI_KEY"]
+fallback = "balanced"
+
+[routing.quick]
+model = "gpt-6-luna"
+thinking_level = "low"
+description = "Simple questions and small, clear tasks."
+
+[routing.balanced]
+model = "gpt-6.1-sol"
+thinking_level = "medium"
+description = "General tasks that need moderate reasoning."
+
+[routing.deep]
+model = "gpt-6-astra"
+thinking_level = "medium"
+description = "Complex tasks that need careful reasoning."

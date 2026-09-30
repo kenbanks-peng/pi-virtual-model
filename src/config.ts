@@ -1,3 +1,4 @@
+import { parse } from "smol-toml";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,13 +14,12 @@ export interface RouteOption {
 }
 
 export interface VirtualModelConfig {
-  apiKey?: string | string[];
+  apiKey: string | string[];
   provider: string;
   id: string;
   name: string;
   options: RouteOption[];
-  directOption: string;
-  fallbackOption: string;
+  fallback: string;
 }
 
 function defaultConfig(): VirtualModelConfig {
@@ -28,9 +28,9 @@ function defaultConfig(): VirtualModelConfig {
     options: [
       { id: "quick", model: "gpt-6-luna", thinkingLevel: "low", description: "Simple questions and small, clear tasks." },
       { id: "balanced", model: "gpt-6.1-sol", thinkingLevel: "medium", description: "General tasks that need moderate reasoning." },
-      { id: "deep", model: "gpt-6-astra", thinkingLevel: "high", description: "Complex tasks that need careful reasoning." },
+      { id: "deep", model: "gpt-6-astra", thinkingLevel: "medium", description: "Complex tasks that need careful reasoning." },
     ],
-    directOption: "balanced", fallbackOption: "balanced", apiKey: ["printenv", "TYPESAFE_AI_KEY"],
+    fallback: "balanced", apiKey: ["printenv", "TYPESAFE_AI_KEY"],
   };
 }
 
@@ -50,37 +50,31 @@ export function ensureGlobalConfig(path = globalConfigPath()): void {
   }
 }
 
-function stripComment(line: string): string {
-  let quoted = false;
-  let escaped = false;
-  for (let i = 0; i < line.length; i += 1) {
-    const c = line[i];
-    if (escaped) { escaped = false; continue; }
-    if (c === "\\" && quoted) { escaped = true; continue; }
-    if (c === '"') quoted = !quoted;
-    if (c === "#" && !quoted) return line.slice(0, i).trim();
+function table(value: unknown, name: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`pi-virtual-model config: ${name} must be a table`);
   }
-  return line.trim();
+  return value as Record<string, unknown>;
 }
 
-function parseString(raw: string, key: string): string {
-  try {
-    const value: unknown = JSON.parse(raw);
-    if (typeof value === "string" && value.length > 0) return value;
-  } catch { /* Report one consistent configuration error below. */ }
+function checkKeys(value: Record<string, unknown>, allowed: readonly string[], name: string): void {
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) throw new Error(`pi-virtual-model config: unsupported ${name} key ${key}`);
+  }
+}
+
+function parseString(value: unknown, key: string): string {
+  if (typeof value === "string" && value.length > 0) return value;
   throw new Error(`pi-virtual-model config: ${key} must be a non-empty TOML string`);
 }
 
-function parseApiKey(raw: string): string | string[] {
-  try {
-    const value: unknown = JSON.parse(raw);
-    if (typeof value === "string" && value.trim()) return value;
-    if (Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "string" && !v.includes("\0")) && value[0].trim()) return value;
-  } catch { /* Do not include the value: it can contain credentials. */ }
+function parseApiKey(value: unknown): string | string[] {
+  if (typeof value === "string" && value.trim()) return value;
+  if (Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "string" && !v.includes("\0")) && value[0].trim()) return value;
   throw new Error("pi-virtual-model config: api_key must be a non-empty string or command array of strings");
 }
 
-function validateOptions(options: RouteOption[], directOption: string, fallbackOption: string): void {
+function validateOptions(options: RouteOption[], fallback: string): void {
   if (!options.length) throw new Error("pi-virtual-model config: options must contain at least one option");
   const ids = new Set<string>();
   for (const option of options) {
@@ -90,51 +84,45 @@ function validateOptions(options: RouteOption[], directOption: string, fallbackO
     if (!(THINKING_LEVELS as readonly string[]).includes(option.thinkingLevel)) throw new Error(`pi-virtual-model config: option ${option.id} has unsupported thinking level ${option.thinkingLevel}`);
     if (!option.description) throw new Error(`pi-virtual-model config: option ${option.id} needs a description`);
   }
-  for (const id of [directOption, fallbackOption]) if (!ids.has(id)) throw new Error(`pi-virtual-model config: option ${id} is not defined`);
+  if (!ids.has(fallback)) throw new Error(`pi-virtual-model config: option ${fallback} is not defined`);
 }
 
 export function parseConfigToml(source: string): VirtualModelConfig {
   const config = defaultConfig();
-  let section = "";
-  let options: RouteOption[] | undefined;
-  for (const sourceLine of source.split(/\r?\n/)) {
-    const line = stripComment(sourceLine);
-    if (!line) continue;
-    const sectionMatch = /^\[([a-z_]+)]$/.exec(line);
-    if (sectionMatch) {
-      section = sectionMatch[1];
-      if (!["virtual_model", "routing", "jev"].includes(section)) throw new Error(`pi-virtual-model config: unsupported section [${section}]`);
-      continue;
-    }
-    const assignment = /^([a-z_]+)\s*=\s*(.+)$/.exec(line);
-    if (!assignment) throw new Error(`pi-virtual-model config: unsupported line: ${sourceLine}`);
-    const [, key, raw] = assignment;
-    if (section === "jev") {
-      if (key !== "api_key") throw new Error(`pi-virtual-model config: unsupported jev key ${key}`);
-      config.apiKey = parseApiKey(raw);
-    } else if (section === "virtual_model") {
-      if (key === "provider") config.provider = parseString(raw, key);
-      else if (key === "id") config.id = parseString(raw, key);
-      else if (key === "name") config.name = parseString(raw, key);
-      else throw new Error(`pi-virtual-model config: unsupported virtual_model key ${key}`);
-    } else if (section === "routing") {
-      if (key === "options") {
-        let values: unknown;
-        try { values = JSON.parse(raw); } catch { throw new Error("pi-virtual-model config: options must be an array of strings"); }
-        if (!Array.isArray(values)) throw new Error("pi-virtual-model config: options must be an array of strings");
-        options = values.map((entry) => {
-          if (typeof entry !== "string") throw new Error("pi-virtual-model config: each option must be a string");
-          const [id, model, thinkingLevel, description, ...extra] = entry.split("|");
-          if (!id || !model || !thinkingLevel || !description || extra.length) throw new Error("pi-virtual-model config: each option must be id|model|thinking_level|description");
-          return { id, model, thinkingLevel: thinkingLevel as ThinkingLevel, description };
-        });
-      } else if (key === "direct_option") config.directOption = parseString(raw, key);
-      else if (key === "fallback_option") config.fallbackOption = parseString(raw, key);
-      else throw new Error(`pi-virtual-model config: unsupported routing key ${key}`);
-    } else throw new Error(`pi-virtual-model config: key ${key} must be in a section`);
+  let document: Record<string, unknown>;
+  try {
+    document = parse(source);
+  } catch {
+    // Parser errors can quote source lines containing credentials.
+    throw new Error("pi-virtual-model config: invalid TOML syntax");
   }
-  if (options) config.options = options;
-  validateOptions(config.options, config.directOption, config.fallbackOption);
+  checkKeys(document, ["virtual_model", "routing"], "root");
+  if (document.virtual_model !== undefined) {
+    const identity = table(document.virtual_model, "virtual_model");
+    checkKeys(identity, ["provider", "id", "name"], "virtual_model");
+    for (const key of ["provider", "id", "name"] as const) {
+      if (identity[key] !== undefined) config[key] = parseString(identity[key], key);
+    }
+  }
+  if (document.routing !== undefined) {
+    const routing = table(document.routing, "routing");
+    if (routing.fallback !== undefined) config.fallback = parseString(routing.fallback, "fallback");
+    if (routing.api_key !== undefined) config.apiKey = parseApiKey(routing.api_key);
+    const options = Object.entries(routing).filter(([key]) => key !== "fallback" && key !== "api_key");
+    if (options.length > 0) {
+      config.options = options.map(([id, value]) => {
+        const option = table(value, `routing.${id}`);
+        checkKeys(option, ["model", "thinking_level", "description"], `routing.${id}`);
+        return {
+          id,
+          model: parseString(option.model, `${id}.model`),
+          thinkingLevel: parseString(option.thinking_level, `${id}.thinking_level`) as ThinkingLevel,
+          description: parseString(option.description, `${id}.description`),
+        };
+      });
+    }
+  }
+  validateOptions(config.options, config.fallback);
   return config;
 }
 
