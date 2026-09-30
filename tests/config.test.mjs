@@ -60,7 +60,7 @@ test("creates the global phase config without replacing user changes", () => {
     ensureGlobalConfig(path);
     assert.equal(readFileSync(path, "utf8"), bundled);
     assert.deepEqual(loadConfig(path), parseConfigToml(bundled));
-    const custom = bundled.replace('standard_model = "gpt-6-astra"', 'standard_model = "custom"');
+    const custom = bundled.replace('standard_model = "gpt-6.1-sol"', 'standard_model = "custom"');
     writeFileSync(path, custom);
     ensureGlobalConfig(path);
     assert.equal(readFileSync(path, "utf8"), custom);

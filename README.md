@@ -4,6 +4,7 @@ A phase-based virtual model router for Pi:
 
 - Jev classifies each new request as simple, standard, or complex and selects the configured model.
 - Tool follow-ups and retries stay on the selected model. Direct requests, such as compaction summaries, use the configured direct model.
+- Jev gateway/service errors (502, 503, 504) are retried twice, after 250 ms and 500 ms. If all three attempts fail, the turn uses the configured standard model with the requested thinking level. Authentication errors and invalid responses still surface as errors.
 
 Set `[jev].api_key` to a literal string or a command array that returns the key, for example `api_key = ["fnox", "get", "THE-KEY"]`. The command runs when Jev classifies a request. The selected thinking level controls reasoning effort, not model selection.
 

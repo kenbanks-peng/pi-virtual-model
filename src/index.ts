@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -68,10 +69,10 @@ function getJevApiKey(configuredKey?: string | string[]): string {
   return key;
 }
 
-async function classifyRoute(request: Request, configuredKey: string | string[] | undefined, thinkingLevels: readonly string[]): Promise<RouteChoice> {
+async function classifyRoute(request: Request, configuredKey: string | string[] | undefined, thinkingLevels: readonly string[]): Promise<RouteChoice | undefined> {
   const apiKey = getJevApiKey(configuredKey);
 
-  const response = await fetch("https://www.jevai.org/api/v1/decisions/model-route", {
+  const options: RequestInit = {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -95,7 +96,17 @@ async function classifyRoute(request: Request, configuredKey: string | string[] 
       priorities: ["quality", "task_fit", "latency", "cost"],
       stakes: "Choose the least demanding candidate that can complete the request reliably.",
     }),
-  });
+  };
+  let response: Response;
+  for (let attempt = 0; ; attempt += 1) {
+    request.signal?.throwIfAborted();
+    response = await fetch("https://www.jevai.org/api/v1/decisions/model-route", options);
+    if (![502, 503, 504].includes(response.status)) break;
+    await response.body?.cancel();
+    request.signal?.throwIfAborted();
+    if (attempt === 2) return undefined;
+    await delay(250 * 2 ** attempt, undefined, { signal: request.signal });
+  }
   if (!response.ok) throw new Error(`pi-virtual-model: Jev model-route failed (${response.status} ${response.statusText})`);
 
   const payload: unknown = await response.json();
@@ -149,6 +160,9 @@ export default function virtualModelExtension(pi: ExtensionAPI): void {
       }
 
       const choice = await classifyRoute(request, config.apiKey, config.thinkingLevels);
+      if (!choice) {
+        return routeTo(request, ctx, config.standardModel, { model: config.standardModel });
+      }
       const modelId = {
         simple: config.simpleModel,
         standard: config.standardModel,

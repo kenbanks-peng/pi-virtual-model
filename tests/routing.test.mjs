@@ -130,3 +130,67 @@ test("fails clearly for Jev HTTP errors or invalid candidate answers", async () 
     await assert.rejects(invalid.route(invalid.request), /unknown model candidate/);
   } finally { invalid.restoreFetch(); }
 });
+
+test("recovers when Jev returns a temporary 502 before a successful decision", async () => {
+  const fixture = setup();
+  const successfulFetch = globalThis.fetch;
+  let attempts = 0;
+  try {
+    globalThis.fetch = async (...args) => {
+      attempts += 1;
+      if (attempts === 1) return new Response(null, { status: 502, statusText: "Bad Gateway" });
+      return successfulFetch(...args);
+    };
+    const result = await fixture.route(fixture.request);
+    assert.equal(result.model.id, "medium-model");
+    assert.equal(attempts, 2);
+  } finally { fixture.restoreFetch(); }
+});
+
+test("does not retry rejected requests", async () => {
+  const fixture = setup();
+  let attempts = 0;
+  try {
+    globalThis.fetch = async () => {
+      attempts += 1;
+      return new Response(null, { status: 401, statusText: "Unauthorized" });
+    };
+    await assert.rejects(fixture.route(fixture.request), /401 Unauthorized/);
+    assert.equal(attempts, 1);
+  } finally { fixture.restoreFetch(); }
+});
+
+test("cancellation during backoff stops Jev retries", async () => {
+  const fixture = setup();
+  const controller = new AbortController();
+  let attempts = 0;
+  try {
+    globalThis.fetch = async () => {
+      attempts += 1;
+      setTimeout(() => controller.abort(), 10);
+      return new Response(null, { status: 502, statusText: "Bad Gateway" });
+    };
+    await assert.rejects(fixture.route({ ...fixture.request, signal: controller.signal }), { name: "AbortError" });
+    assert.equal(attempts, 1);
+  } finally { fixture.restoreFetch(); }
+});
+
+test("persistent gateway failures fall back to standard and pin continuations", async () => {
+  for (const status of [502, 503, 504]) {
+    const fixture = setup();
+    let attempts = 0;
+    try {
+      globalThis.fetch = async () => {
+        attempts += 1;
+        return new Response(null, { status });
+      };
+      const result = await fixture.route({ ...fixture.request, thinkingLevel: "low" });
+      assert.equal(attempts, 3);
+      assert.equal(result.model.id, "medium-model");
+      assert.equal(result.thinkingLevel, "low");
+      const continuation = await fixture.route({ ...fixture.request, reason: "continuation", state: result.state });
+      assert.equal(continuation.model.id, "medium-model");
+      assert.equal(attempts, 3);
+    } finally { fixture.restoreFetch(); }
+  }
+});

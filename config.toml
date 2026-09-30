@@ -15,8 +15,8 @@ thinking_levels = ["low", "medium", "high", "xhigh"]
 [routing]
 # Jev selects a model and thinking level for each new user request.
 simple_model = "gpt-6-luna"
-standard_model = "gpt-6-astra"
-complex_model = "gpt-6.1-sol"
+standard_model = "gpt-6.1-sol"
+complex_model = "gpt-6-astra"
 # Requests outside the agent loop, such as compaction summaries.
 direct_model = "gpt-6-luna"
 direct_thinking_level = "medium"
