@@ -1,6 +1,6 @@
 {
   "name": "@npm-ken/pi-virtual-model",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A cost-aware virtual model router for Pi",
   "type": "module",
   "keywords": ["pi-package", "pi-extension", "virtual-model", "model-router"],
@@ -10,6 +10,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit false --outDir .test-build && node --test tests/*.test.mjs",
     "prepack": "pnpm typecheck"
   },
   "peerDependencies": {

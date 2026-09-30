@@ -19,22 +19,11 @@ export interface VirtualModelConfig {
   id: string;
   name: string;
   thinkingLevels: ThinkingLevel[];
-  models: Record<ThinkingLevel, string>;
+  planningModel: string;
+  implementationModel: string;
   directModel: string;
   directThinkingLevel: ThinkingLevel;
-  continuationFallbackThinkingLevel: ThinkingLevel;
-  retryFallbackThinkingLevel: ThinkingLevel;
 }
-
-const DEFAULT_MODELS: Record<ThinkingLevel, string> = {
-  off: "gpt-5.6-terra",
-  minimal: "gpt-5.6-terra",
-  low: "gpt-5.6-luna",
-  medium: "gpt-5.6-terra",
-  high: "gpt-5.6-sol",
-  xhigh: "gpt-5.6-sol",
-  max: "gpt-5.6-sol",
-};
 
 function defaultConfig(): VirtualModelConfig {
   return {
@@ -42,11 +31,10 @@ function defaultConfig(): VirtualModelConfig {
     id: "auto",
     name: "Auto",
     thinkingLevels: ["low", "medium", "high", "xhigh"],
-    models: { ...DEFAULT_MODELS },
-    directModel: "gpt-5.6-luna",
+    planningModel: "gpt-6-astra",
+    implementationModel: "gpt-6-luna",
+    directModel: "gpt-6-luna",
     directThinkingLevel: "medium",
-    continuationFallbackThinkingLevel: "medium",
-    retryFallbackThinkingLevel: "medium",
   };
 }
 
@@ -156,17 +144,15 @@ export function parseConfigToml(source: string): VirtualModelConfig {
     }
 
     if (section === "routing") {
-      const modelMatch = /^(off|minimal|low|medium|high|xhigh|max)_model$/.exec(key);
-      if (modelMatch) {
-        config.models[modelMatch[1] as ThinkingLevel] = parseString(raw, key);
+      if (key === "planning_model") {
+        config.planningModel = parseString(raw, key);
+      } else if (key === "implementation_model") {
+        config.implementationModel = parseString(raw, key);
       } else if (key === "direct_model") {
         config.directModel = parseString(raw, key);
       } else if (key === "direct_thinking_level") {
         config.directThinkingLevel = parseThinkingLevel(raw, key);
-      } else if (key === "continuation_fallback_thinking_level") {
-        config.continuationFallbackThinkingLevel = parseThinkingLevel(raw, key);
-      } else if (key === "retry_fallback_thinking_level") {
-        config.retryFallbackThinkingLevel = parseThinkingLevel(raw, key);
+
       } else {
         throw new Error(`pi-virtual-model config: unsupported routing key ${key}`);
       }
