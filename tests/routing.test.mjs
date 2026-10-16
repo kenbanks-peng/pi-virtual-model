@@ -3,24 +3,19 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { authState, openUsageLedger, storeApiKey } from "pi-typesafe";
+import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import virtualModelExtension from "../.test-build/index.js";
 
-function setup({ key = "test-key", decision = "balanced" } = {}) {
+function setup({ decision = "balanced", virtualId = "auto", canSelect = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pi-virtual-model-test-"));
   const oldDir = process.env.PI_CODING_AGENT_DIR;
-  const oldKey = process.env.TYPESAFE_API_KEY;
-  const caps = ["PI_TYPESAFE_MAX_REQUESTS_PER_DAY", "PI_TYPESAFE_MAX_INPUT_TOKENS_PER_DAY", "PI_TYPESAFE_MAX_USD_PER_DAY"];
-  const oldCaps = caps.map(name => process.env[name]);
-  for (const name of caps) delete process.env[name];
   process.env.PI_CODING_AGENT_DIR = dir;
-  if (key === null) delete process.env.TYPESAFE_API_KEY;
-  else process.env.TYPESAFE_API_KEY = key;
   const configDir = join(dir, "extensions", "pi-virtual-model");
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(configDir, "config.toml"), `
 [virtual_model]
 provider = "openai-codex"
+id = "${virtualId}"
 [routing]
 fallback = "balanced"
 [routing.quick]
@@ -39,271 +34,258 @@ description = "Complex tasks"
   let definition;
   const entries = [];
   const calls = [];
+  const lookups = [];
+  const handlers = {};
+  const selections = [];
   virtualModelExtension({
+    on(event, handler) { handlers[event] = handler; },
+    async setModel(model) { selections.push(model); return canSelect; },
     registerVirtualModel(value) { definition = value; },
     registerEntryRenderer() {},
     appendEntry(customType, data) { entries.push({ type: "custom", customType, data }); },
   });
   const models = Object.fromEntries(["small", "medium-model", "large"].map(id => [id, { id, provider: "openai-codex" }]));
-  const ctx = {
-    modelRegistry: { find: (provider, id) => provider === "openai-codex" ? models[id] : undefined },
-    sessionManager: { getBranch: () => entries },
+  models[virtualId] = { id: virtualId, provider: "openai-codex" };
+  const jev = { type: "classifier", provider: "typesafe", id: "jev-latest" };
+  const registry = {
+    find: (provider, id) => provider === "openai-codex" ? models[id] : undefined,
+    findOfType(...args) { lookups.push(args); return jev; },
+    async classify(model, input, options) {
+      calls.push({ model, input, options });
+      return {
+        stopReason: "stop",
+        answers: { route: { type: "choice", choice: decision, confidence: 1, probabilities: { [decision]: 1 } } },
+      };
+    },
   };
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url, options) => {
-    calls.push({ url, options, body: JSON.parse(options.body) });
-    return Response.json({
-      model: "jev-1.13.0",
-      answers: { route: { type: "choice", choice: decision, confidence: 1, probabilities: { quick: decision === "quick" ? 1 : 0, balanced: decision === "balanced" ? 1 : 0, deep: decision === "deep" ? 1 : 0 } } },
-      usage: { input_tokens: 100, output_tokens: 20 },
-    });
-  };
+  const ctx = { modelRegistry: registry, sessionManager: { getBranch: () => entries } };
   const user = { role: "user", content: "Fix the plugin", timestamp: 1 };
   const request = { model: { id: "auto" }, reason: "user", thinkingLevel: "high", messages: [user], signal: new AbortController().signal };
   return {
-    route: request => definition.route(request, ctx), request, user, models, entries, calls, dir,
-    restoreFetch() {
-      globalThis.fetch = originalFetch;
+    start: () => handlers.session_start({}, ctx), selections,
+    route: request => definition.route(request, ctx), request, user, models, jev, registry, ctx, entries, calls, lookups, dir,
+    cleanup() {
       if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = oldDir;
-      if (oldKey === undefined) delete process.env.TYPESAFE_API_KEY;
-      else process.env.TYPESAFE_API_KEY = oldKey;
-      caps.forEach((name, index) => {
-        if (oldCaps[index] === undefined) delete process.env[name];
-        else process.env[name] = oldCaps[index];
-      });
       rmSync(dir, { recursive: true, force: true });
     },
   };
 }
 
-test("chooses configured models for Jev difficulty", async () => {
-  for (const [decision, expected] of [["quick", "small"], ["balanced", "medium-model"], ["deep", "large"]]) {
-    const test = setup({ decision });
+test("selects the configured virtual model at session startup without consulting enabledModels", async () => {
+  for (const virtualId of ["auto", "custom-auto"]) {
+    const fixture = setup({ virtualId });
     try {
-      const result = await test.route(test.request);
+      assert.deepEqual(fixture.selections, []);
+      await fixture.start();
+      assert.deepEqual(fixture.selections, [fixture.models[virtualId]]);
+      assert.equal(fixture.calls.length, 0);
+    } finally { fixture.cleanup(); }
+  }
+});
+
+test("reports authentication failure when startup selection is rejected", async () => {
+  const fixture = setup({ canSelect: false });
+  try {
+    await assert.rejects(fixture.start(), /authenticate with \/login/);
+    assert.deepEqual(fixture.selections, [fixture.models.auto]);
+  } finally { fixture.cleanup(); }
+});
+
+test("reports a missing virtual model at startup without selecting another model", async () => {
+  const fixture = setup();
+  try {
+    delete fixture.models.auto;
+    await assert.rejects(fixture.start(), /pi-virtual-model: openai-codex\/auto is not available/);
+    assert.deepEqual(fixture.selections, []);
+  } finally { fixture.cleanup(); }
+});
+
+test("chooses configured routes through Pi's Jev classifier", async () => {
+  for (const [decision, expected] of [["quick", "small"], ["balanced", "medium-model"], ["deep", "large"]]) {
+    const fixture = setup({ decision });
+    try {
+      const result = await fixture.route(fixture.request);
       assert.equal(result.model.id, expected);
       assert.equal(result.state.model, expected);
+      assert.equal(result.state.optionId, decision);
       assert.equal(result.state.thinkingLevel, result.thinkingLevel);
       assert.equal(result.thinkingLevel, { quick: "low", balanced: "medium", deep: "high" }[decision]);
-      assert.equal(test.calls[0].url, "https://api.typesafe.ai/v1/systemone");
-      assert.equal(new Headers(test.calls[0].options.headers).get("authorization"), "Bearer test-key");
-      const { body, options } = test.calls[0];
-      assert.equal(options.method, "POST");
-      assert.equal(new Headers(options.headers).get("content-type"), "application/json");
-      assert.ok(options.signal instanceof AbortSignal);
-      assert.deepEqual(Object.keys(body).sort(), ["model", "questions", "state"]);
-      assert.equal(body.model, "jev-latest");
-      assert.equal(body.state.latest_request, "Fix the plugin");
-      assert.equal(body.questions.route.type, "choice");
-      assert.equal(typeof body.questions.route.instructions, "string");
-      assert.deepEqual(Object.keys(body.questions.route.criteria).sort(), ["balanced", "deep", "quick"]);
-      assert.match(body.questions.route.criteria.quick, /Fast tasks.*small.*low/);
-      assert.ok(Object.values(body.questions.route.criteria).every(value => typeof value === "string"));
-    } finally { test.restoreFetch(); }
+      assert.deepEqual(fixture.lookups, [["classifier", "typesafe", "jev-latest"]]);
+      const { model, input, options } = fixture.calls[0];
+      assert.equal(model, fixture.jev);
+      assert.deepEqual(options, { signal: fixture.request.signal, timeoutMs: 15_000, maxRetries: 2 });
+      assert.equal(input.state.latest_request, "Fix the plugin");
+      assert.equal(input.questions.route.type, "choice");
+      assert.deepEqual(Object.keys(input.questions.route.criteria).sort(), ["balanced", "deep", "quick"]);
+      assert.match(input.questions.route.criteria.quick, /Fast tasks.*small.*low/);
+    } finally { fixture.cleanup(); }
   }
 });
 
-test("rejects malformed or legacy Jev answers", async () => {
-  const fixture = setup();
+test("classifies each user turn but pins continuations", async () => {
+  const fixture = setup({ decision: "deep" });
   try {
-    for (const payload of [null, {}, { answers: null }, { answers: { route: null } },
-      { answers: { route: { type: "score", choice: "simple:low" } } },
-      { answers: { route: { type: "choice", choice: 1 } } },
-      { answers: { route: { type: "choice", choice: "unknown" } } },
-      { code: 0, data: { decision: "simple:low" } }]) {
-      globalThis.fetch = async () => Response.json(payload);
-      await assert.rejects(fixture.route(fixture.request), /TypeSafe returned/);
-    }
-  } finally { fixture.restoreFetch(); }
-});
-
-test("classifies each new user message and keeps the selection on continuations", async () => {
-  const test = setup({ decision: "deep" });
-  try {
-    const selected = await test.route(test.request);
-    const next = await test.route({ ...test.request, reason: "continuation", state: selected.state });
+    const selected = await fixture.route(fixture.request);
+    const next = await fixture.route({ ...fixture.request, reason: "continuation", state: selected.state });
     assert.equal(next.model.id, "large");
     assert.equal(next.thinkingLevel, selected.thinkingLevel);
-    assert.equal(test.calls.length, 1);
-    await test.route({ ...test.request, reason: "user", messages: [...test.request.messages, { role: "user", content: "Simple question" }] });
-    assert.equal(test.calls.length, 2);
-  } finally { test.restoreFetch(); }
+    assert.equal(fixture.calls.length, 1);
+    await fixture.route({ ...fixture.request, messages: [...fixture.request.messages, { role: "user", content: "Simple question" }], state: selected.state });
+    assert.equal(fixture.calls.length, 2);
+  } finally { fixture.cleanup(); }
 });
 
-test("retries stay on the failed model without another Jev call", async () => {
-  const test = setup();
+test("physical model retries bypass Jev", async () => {
+  const fixture = setup();
   try {
-    const retry = await test.route({ ...test.request, reason: "retry", failed: { model: test.models.large, thinkingLevel: "low" } });
-    assert.equal(retry.model.id, "large");
-    assert.equal(retry.thinkingLevel, "low");
-    assert.equal(test.calls.length, 0);
-  } finally { test.restoreFetch(); }
-});
-
-test("direct requests use Jev to classify the task", async () => {
-  const test = setup({ decision: "deep" });
-  try {
-    const result = await test.route({ ...test.request, reason: "direct" });
+    const result = await fixture.route({ ...fixture.request, reason: "retry", failed: { model: fixture.models.large, thinkingLevel: "low" } });
     assert.equal(result.model.id, "large");
-    assert.equal(result.thinkingLevel, "high");
-    assert.equal(test.calls.length, 1);
-  } finally { test.restoreFetch(); }
-});
-
-test("fails clearly if the Jev key is missing", async () => {
-  const test = setup({ key: null });
-  try {
-    await assert.rejects(test.route(test.request), /No API key/);
-  } finally { test.restoreFetch(); }
-});
-
-test("fails clearly for Jev HTTP errors or invalid candidate answers", async () => {
-  const http = setup();
-  try {
-    globalThis.fetch = async () => new Response(null, { status: 401, statusText: "Unauthorized" });
-    await assert.rejects(http.route(http.request), /HTTP 401/);
-  } finally { http.restoreFetch(); }
-  const invalid = setup({ decision: "unknown" });
-  try {
-    await assert.rejects(invalid.route(invalid.request), /TypeSafe returned/);
-  } finally { invalid.restoreFetch(); }
-});
-
-test("recovers when Jev returns a temporary 502 before a successful decision", async () => {
-  const fixture = setup();
-  const successfulFetch = globalThis.fetch;
-  let attempts = 0;
-  try {
-    globalThis.fetch = async (...args) => {
-      attempts += 1;
-      if (attempts === 1) return new Response(null, { status: 502, statusText: "Bad Gateway" });
-      return successfulFetch(...args);
-    };
-    const result = await fixture.route(fixture.request);
-    assert.equal(result.model.id, "medium-model");
-    assert.equal(attempts, 2);
-  } finally { fixture.restoreFetch(); }
-});
-
-test("does not retry rejected requests", async () => {
-  const fixture = setup();
-  let attempts = 0;
-  try {
-    globalThis.fetch = async () => {
-      attempts += 1;
-      return new Response(null, { status: 401, statusText: "Unauthorized" });
-    };
-    await assert.rejects(fixture.route(fixture.request), /HTTP 401/);
-    assert.equal(attempts, 1);
-  } finally { fixture.restoreFetch(); }
-});
-
-test("cancellation during backoff stops Jev retries", async () => {
-  const fixture = setup();
-  const controller = new AbortController();
-  let attempts = 0;
-  try {
-    globalThis.fetch = async () => {
-      attempts += 1;
-      setTimeout(() => controller.abort(), 10);
-      return new Response(null, { status: 502, statusText: "Bad Gateway" });
-    };
-    await assert.rejects(fixture.route({ ...fixture.request, signal: controller.signal }), { name: "AbortError" });
-    assert.equal(attempts, 1);
-  } finally { fixture.restoreFetch(); }
-});
-
-test("persistent transient failures fall back to balanced and pin continuations", async () => {
-  for (const status of [429, 502, 503, 504, 529]) {
-    const fixture = setup();
-    let attempts = 0;
-    try {
-      globalThis.fetch = async () => {
-        attempts += 1;
-        return new Response(null, { status });
-      };
-      const result = await fixture.route({ ...fixture.request, thinkingLevel: "low" });
-      assert.equal(attempts, 3);
-      assert.equal(result.model.id, "medium-model");
-      assert.equal(result.thinkingLevel, "medium");
-      const continuation = await fixture.route({ ...fixture.request, reason: "continuation", state: result.state });
-      assert.equal(continuation.model.id, "medium-model");
-      assert.equal(attempts, 3);
-    } finally { fixture.restoreFetch(); }
-  }
-});
-
-test("uses the pi-typesafe login store without router credentials", async () => {
-  const fixture = setup({ key: null });
-  try {
-    storeApiKey("stored-typesafe-key-12345");
-    await fixture.route(fixture.request);
-    assert.equal(new Headers(fixture.calls[0].options.headers).get("authorization"), "Bearer stored-typesafe-key-12345");
-    assert.equal(authState().kind, "stored");
-    assert.equal(authState().verified, true);
-  } finally { fixture.restoreFetch(); }
-});
-
-test("environment credentials take precedence over the login store", async () => {
-  const fixture = setup();
-  try {
-    storeApiKey("stored-typesafe-key-12345");
-    await fixture.route(fixture.request);
-    assert.equal(new Headers(fixture.calls[0].options.headers).get("authorization"), "Bearer test-key");
-  } finally { fixture.restoreFetch(); }
-});
-
-test("records decisions in shared usage and continues beyond twenty attempts", async () => {
-  const fixture = setup();
-  try {
-    for (let index = 0; index < 25; index += 1) await fixture.route(fixture.request);
-    const totals = openUsageLedger().today();
-    assert.equal(fixture.calls.length, 25);
-    assert.equal(totals.requestsStarted, 25);
-    assert.equal(totals.requestsSucceeded, 25);
-    assert.equal(totals.inputTokens, 2500);
-    assert.equal(totals.outputTokens, 500);
-    assert.ok(totals.estimatedUsd > 0);
-    assert.equal(authState().verified, true);
-  } finally { fixture.restoreFetch(); }
-});
-
-test("authentication failures update pi-typesafe state without leaking upstream details", async () => {
-  const fixture = setup();
-  try {
-    globalThis.fetch = async () => new Response("secret-upstream-body", { status: 401 });
-    await assert.rejects(fixture.route(fixture.request), error => {
-      assert.equal(error.code, "http");
-      assert.equal(error.status, 401);
-      assert.ok(!error.message.includes("secret-upstream-body"));
-      return true;
-    });
-    assert.equal(authState().usable, false);
-    assert.equal(authState().lastFailure.status, 401);
-    assert.equal(openUsageLedger().today().requestsFailed, 1);
-  } finally { fixture.restoreFetch(); }
-});
-
-test("honors explicit shared daily caps without retries or silent fallback", async () => {
-  const fixture = setup();
-  try {
-    process.env.PI_TYPESAFE_MAX_REQUESTS_PER_DAY = "1";
-    // Requests from another extension count toward the shared cap.
-    openUsageLedger().recordStart();
-    await assert.rejects(fixture.route(fixture.request), error => error.code === "budget");
+    assert.equal(result.thinkingLevel, "low");
     assert.equal(fixture.calls.length, 0);
-    assert.equal(fixture.entries.length, 0);
-  } finally { fixture.restoreFetch(); }
+  } finally { fixture.cleanup(); }
 });
 
-test("an already cancelled request never reaches TypeSafe", async () => {
+test("direct requests use Jev", async () => {
+  const fixture = setup({ decision: "deep" });
+  try {
+    assert.equal((await fixture.route({ ...fixture.request, reason: "direct" })).model.id, "large");
+    assert.equal(fixture.calls.length, 1);
+  } finally { fixture.cleanup(); }
+});
+
+test("missing Jev uses fallback without a classifier call", async () => {
+  const fixture = setup();
+  try {
+    fixture.registry.findOfType = () => undefined;
+    assert.equal((await fixture.route(fixture.request)).model.id, "medium-model");
+    assert.equal(fixture.calls.length, 0);
+  } finally { fixture.cleanup(); }
+});
+
+test("classifier errors fall back once and pin continuations without exposing upstream details", async () => {
+  const fixture = setup();
+  let calls = 0;
+  try {
+    fixture.registry.classify = async () => {
+      calls += 1;
+      return { stopReason: "error", errorMessage: "secret-upstream-body", answers: {} };
+    };
+    const selected = await fixture.route(fixture.request);
+    assert.equal(selected.model.id, "medium-model");
+    assert.equal(selected.thinkingLevel, "medium");
+    const continuation = await fixture.route({ ...fixture.request, reason: "continuation", state: selected.state });
+    assert.equal(continuation.model.id, "medium-model");
+    assert.equal(calls, 1); // Retries belong to Pi, not another outer loop.
+    assert.ok(!JSON.stringify(fixture.entries).includes("secret-upstream-body"));
+  } finally { fixture.cleanup(); }
+});
+
+test("missing, wrong-type, and unknown route answers use fallback", async () => {
+  const fixture = setup();
+  try {
+    for (const answer of [undefined, null, { type: "score", score: 2 }, { type: "choice", choice: "unknown" }]) {
+      fixture.registry.classify = async () => ({ stopReason: "stop", answers: { route: answer } });
+      assert.equal((await fixture.route(fixture.request)).model.id, "medium-model");
+    }
+  } finally { fixture.cleanup(); }
+});
+
+test("already cancelled requests never reach the registry", async () => {
   const fixture = setup();
   try {
     const controller = new AbortController();
     controller.abort();
     await assert.rejects(fixture.route({ ...fixture.request, signal: controller.signal }), { name: "AbortError" });
     assert.equal(fixture.calls.length, 0);
-    assert.equal(openUsageLedger().today().requestsStarted, 0);
-  } finally { fixture.restoreFetch(); }
+    assert.equal(fixture.lookups.length, 0);
+  } finally { fixture.cleanup(); }
+});
+
+test("cancellation during classification stops routing rather than falling back", async () => {
+  const fixture = setup();
+  try {
+    const controller = new AbortController();
+    fixture.registry.classify = async () => {
+      controller.abort();
+      return { stopReason: "error", answers: {} };
+    };
+    await assert.rejects(fixture.route({ ...fixture.request, signal: controller.signal }), { name: "AbortError" });
+    assert.equal(fixture.entries.length, 0);
+  } finally { fixture.cleanup(); }
+});
+
+test("an aborted classifier result never selects fallback", async () => {
+  const fixture = setup();
+  try {
+    fixture.registry.classify = async () => ({ stopReason: "aborted", answers: {} });
+    await assert.rejects(fixture.route(fixture.request), { name: "AbortError" });
+    assert.equal(fixture.entries.length, 0);
+  } finally { fixture.cleanup(); }
+});
+
+test("preserves bounded user text and recent context", async () => {
+  const fixture = setup();
+  try {
+    await fixture.route({ ...fixture.request, messages: [
+      { role: "user", content: "Prior request" },
+      { role: "assistant", content: [{ type: "text", text: "x".repeat(5000) }] },
+      { role: "user", content: [{ type: "image", data: "ignored" }, { type: "text", text: "z".repeat(20_000) }] },
+    ] });
+    const { state } = fixture.calls[0].input;
+    assert.equal(state.latest_request, "z".repeat(16_000));
+    assert.equal(state.recent_context, "x".repeat(4_000));
+  } finally { fixture.cleanup(); }
+});
+
+test("fails clearly when the selected physical model is missing", async () => {
+  const fixture = setup();
+  try {
+    fixture.registry.find = () => undefined;
+    await assert.rejects(fixture.route(fixture.request), /openai-codex\/medium-model is not available/);
+  } finally { fixture.cleanup(); }
+});
+
+test("uses the real Pi registry, provider credentials, protocol and retries", async () => {
+  const fixture = setup({ decision: "deep" });
+  const originalFetch = globalThis.fetch;
+  const oldKey = process.env.TYPESAFE_API_KEY;
+  const calls = [];
+  try {
+    process.env.TYPESAFE_API_KEY = "environment-key";
+    // Isolated Pi auth store: never read or modify the user's real credentials.
+    writeFileSync(join(fixture.dir, "auth.json"), JSON.stringify({ typesafe: { type: "api_key", key: "pi-stored-key" } }));
+    const runtime = await ModelRuntime.create({
+      authPath: join(fixture.dir, "auth.json"),
+      modelsPath: null,
+      refreshOnCreate: false,
+      allowModelNetwork: false,
+    });
+    const registry = new ModelRegistry(runtime);
+    fixture.ctx.modelRegistry = registry;
+    const find = registry.find.bind(registry);
+    registry.find = (provider, id) => fixture.models[id] ?? find(provider, id);
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url, options });
+      if (calls.length === 1) return new Response(null, { status: 502, headers: { "retry-after-ms": "1" } });
+      return Response.json({
+        model: "jev-latest",
+        answers: { route: { type: "choice", choice: "deep", confidence: 1, probabilities: { quick: 0, balanced: 0, deep: 1 } } },
+        usage: { input_tokens: 100, output_tokens: 20 },
+      });
+    };
+    assert.equal((await fixture.route(fixture.request)).model.id, "large");
+    assert.equal(calls.length, 2);
+    assert.equal(String(calls[1].url), "https://api.typesafe.ai/v1/systemone");
+    assert.equal(new Headers(calls[1].options.headers).get("authorization"), "Bearer pi-stored-key");
+    const body = JSON.parse(calls[1].options.body);
+    assert.equal(body.model, "jev-latest");
+    assert.equal(body.state.latest_request, "Fix the plugin");
+    assert.equal(body.questions.route.type, "choice");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (oldKey === undefined) delete process.env.TYPESAFE_API_KEY;
+    else process.env.TYPESAFE_API_KEY = oldKey;
+    fixture.cleanup();
+  }
 });

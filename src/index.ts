@@ -1,11 +1,9 @@
-import { setTimeout as delay } from "node:timers/promises";
 import type {
   ExtensionAPI,
   ExtensionContext,
   ModelRoute,
   ModelRouteRequest,
 } from "@earendil-works/pi-coding-agent";
-import { choice, createTypeSafe, TypeSafeIntegrationError, type TypeSafe } from "pi-typesafe";
 import { loadConfig, type RouteOption } from "./config.js";
 import { indicateRoute, registerRouteIndicator } from "./indicator.js";
 
@@ -47,37 +45,43 @@ function recentContext(messages: readonly Message[]): string {
   }).filter(Boolean).join("\n").slice(-4_000);
 }
 
-async function classifyRoute(typesafe: TypeSafe, request: Request, options: readonly RouteOption[]): Promise<RouteOption | undefined> {
-  const input = {
+async function classifyRoute(ctx: ExtensionContext, request: Request, options: readonly RouteOption[]): Promise<RouteOption | undefined> {
+  request.signal?.throwIfAborted();
+  const jev = ctx.modelRegistry.findOfType("classifier", "typesafe", "jev-latest");
+  if (!jev) return undefined;
+  const result = await ctx.modelRegistry.classify(jev, {
     state: {
       latest_request: lastUserText(request.messages).slice(0, MAX_CLASSIFIER_TEXT),
       recent_context: recentContext(request.messages),
     },
     questions: {
-      route: choice(
-        "Choose the least demanding option that can complete latest_request reliably. Use recent_context for context. Prioritize quality and task fit, then latency and cost. Consider each option's model, thinking level, and description.",
-        Object.fromEntries(options.map((option) => [option.id, `${option.description} Model: ${option.model}. Thinking: ${option.thinkingLevel}.`])),
-      ),
+      route: {
+        type: "choice",
+        instructions: "Choose the least demanding option that can complete latest_request reliably. Use recent_context for context. Prioritize quality and task fit, then latency and cost. Consider each option's model, thinking level, and description.",
+        criteria: Object.fromEntries(options.map((option) => [option.id, `${option.description} Model: ${option.model}. Thinking: ${option.thinkingLevel}.`])),
+      },
     },
-  };
-  for (let attempt = 0; ; attempt += 1) {
-    request.signal?.throwIfAborted();
-    try {
-      const result = await typesafe.evaluate(input, { signal: request.signal });
-      return options.find((option) => option.id === result.answers.route.choice)!;
-    } catch (error) {
-      request.signal?.throwIfAborted();
-      if (!(error instanceof TypeSafeIntegrationError) || ![429, 502, 503, 504, 529].includes(error.status ?? 0)) throw error;
-      if (attempt === 2) return undefined;
-      await delay(250 * 2 ** attempt, undefined, { signal: request.signal });
-    }
-  }
+  }, { signal: request.signal, timeoutMs: 15_000, maxRetries: 2 });
+  request.signal?.throwIfAborted();
+  if (result.stopReason === "aborted") throw new DOMException("Jev classification aborted", "AbortError");
+  // Pi owns authentication and transport retries. Do not expose upstream error bodies.
+  if (result.stopReason !== "stop") return undefined;
+  const answer = result.answers.route;
+  return answer?.type === "choice" ? options.find((option) => option.id === answer.choice) : undefined;
 }
 
 export default function virtualModelExtension(pi: ExtensionAPI): void {
   const config = loadConfig();
   registerRouteIndicator(pi);
-  let typesafe: TypeSafe | undefined;
+
+  pi.on("session_start", async (_event, ctx) => {
+    const model = ctx.modelRegistry.find(config.provider, config.id);
+    if (!model) throw new Error(`pi-virtual-model: ${config.provider}/${config.id} is not available`);
+    // Extension model selection is session-only and does not rewrite settings or model scope.
+    if (!(await pi.setModel(model))) {
+      throw new Error(`pi-virtual-model: could not select ${config.provider}/${config.id}; authenticate with /login`);
+    }
+  });
 
   function routeTo(
     request: Request,
@@ -111,9 +115,7 @@ export default function virtualModelExtension(pi: ExtensionAPI): void {
         return routeTo(request, ctx, option, request.state);
       }
 
-      // The library requires a finite limit; do not impose a practical routing cap.
-      typesafe ??= createTypeSafe({ maxRequests: Number.MAX_SAFE_INTEGER });
-      const selected = await classifyRoute(typesafe, request, config.options);
+      const selected = await classifyRoute(ctx, request, config.options);
       const option = selected ?? config.options.find((candidate) => candidate.id === config.fallback)!;
       const state = { optionId: option.id, model: option.model, thinkingLevel: option.thinkingLevel };
       return routeTo(request, ctx, option, state);
