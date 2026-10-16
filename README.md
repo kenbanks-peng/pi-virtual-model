@@ -1,29 +1,25 @@
 # pi-virtual-model
 
-A phase-based virtual model router for Pi:
+Automatically routes Pi requests to a model and thinking level. TypeSafe's Jev chooses among your configured options based on the task. Tool follow-ups and retries stay on the selected model.
 
-- Jev selects a routing option (`quick`, `balanced`, or `deep` by default) for each new request. Each option specifies a model and thinking level.
-- Tool follow-ups and retries stay on the selected model. Jev also selects a model for direct requests, such as compaction summaries.
-- Jev rate-limit, gateway, and overload errors (429, 502, 503, 504, 529) are retried twice, after 250 ms and 500 ms. If all three attempts fail, the turn uses the configured `fallback`, including its thinking level. Authentication errors and invalid responses still surface as errors.
+## Install
 
-The extension uses [pi-typesafe](https://github.com/DevMortimer/pi-typesafe)'s typed client and Choice question builder with `jev-latest`. pi-typesafe owns credentials, transport, timeouts, response validation, authentication state, and usage accounting. The router only supplies task context and routing policy, including transient-error retries.
+```bash
+pi install npm:pi-typesafe
+pi install npm:@npm-ken/pi-virtual-model
+```
 
-Authenticate with `/typesafe login` or set `TYPESAFE_API_KEY` (environment takes precedence). Obtain a key from [TypeSafe](https://console.typesafe.ai). There is no router-specific key configuration or command execution.
+Restart Pi, then authenticate with `/typesafe login` or set `TYPESAFE_API_KEY`. Get an API key from [TypeSafe](https://console.typesafe.ai).
 
-Routing sends the latest user text (up to 16,000 characters), recent conversation text (up to 4,000 characters), and option descriptions to TypeSafe. Choosing the virtual model enables these requests independently of `/typesafe enable`, which controls only pi-typesafe's agent tool.
+## Configure
 
-Routing attempts, input tokens, and estimated costs are recorded in pi-typesafe's shared daily ledger and authentication outcomes update its shared auth state. `/typesafe status` shows the daily totals; its session counters describe its own client, not this router. The router imposes no practical decision limit (`Number.MAX_SAFE_INTEGER` attempts per client) and sets no daily caps. Explicit `PI_TYPESAFE_MAX_*` daily caps still apply through pi-typesafe; a reached cap surfaces an error rather than silently disabling automatic routing. Each request has pi-typesafe's default 15-second timeout. Each option’s thinking level controls its model’s reasoning effort.
+On first load, the extension creates:
 
-**Breaking change:** remove `[routing].api_key` from existing configuration files. Old key settings are rejected, not migrated.
+```text
+~/.pi/agent/extensions/pi-virtual-model/config.toml
+```
 
-On first load, the extension creates its global configuration at
-`$PI_CODING_AGENT_DIR/extensions/pi-virtual-model/config.toml`. When
-`PI_CODING_AGENT_DIR` is not set, it uses
-`~/.pi/agent/extensions/pi-virtual-model/config.toml`. Edit that file to change
-the virtual model identity and routing options. Restart
-Pi after a change.
-
-Routing options use standard TOML tables with named fields:
+If `PI_CODING_AGENT_DIR` is set, the file is under `$PI_CODING_AGENT_DIR/extensions/pi-virtual-model/config.toml` instead.
 
 ```toml
 [virtual_model]
@@ -50,19 +46,21 @@ thinking_level = "medium"
 description = "Complex tasks that need careful reasoning."
 ```
 
-The table name is the option ID. `fallback` is the only reserved setting
-under `[routing]`. Defining options replaces the default option set; `fallback`
-must refer to a defined option. Existing configurations are preserved on startup.
-Only the configuration format shown above is supported.
+- Set `provider` and each option's `model` to models available in Pi under that provider.
+- Each `[routing.<name>]` defines an option. Its description tells Jev when to choose it.
+- `thinking_level` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; choose a level your model supports.
+- Custom options replace the defaults. `fallback` must name a defined option; it is used after transient TypeSafe errors exhaust retries. Other errors are surfaced.
 
-## Try it
+Restart Pi after editing the configuration.
 
-```bash
-pi -e ./pi-virtual-model --model openai-codex/auto
-```
+## Use
 
-Install it from this workspace with:
+Select **Auto** in Pi's model picker, or launch with:
 
 ```bash
-pi install ./pi-virtual-model
+pi --model openai-codex/auto
 ```
+
+Use your configured provider and ID if you changed them. Send requests as usual; the extension selects the model and thinking level for each new turn.
+
+Routing sends the latest user text (up to 16,000 characters), recent conversation text (up to 4,000 characters), and option descriptions to TypeSafe. It works independently of `/typesafe enable`. View shared usage totals with `/typesafe status`.
