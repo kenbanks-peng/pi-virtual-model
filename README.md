@@ -6,9 +6,15 @@ A phase-based virtual model router for Pi:
 - Tool follow-ups and retries stay on the selected model. Jev also selects a model for direct requests, such as compaction summaries.
 - Jev rate-limit, gateway, and overload errors (429, 502, 503, 504, 529) are retried twice, after 250 ms and 500 ms. If all three attempts fail, the turn uses the configured `fallback`, including its thinking level. Authentication errors and invalid responses still surface as errors.
 
-The extension uses [TypeSafe's official Jev API](https://docs.typesafe.ai/api): `POST https://api.typesafe.ai/v1/systemone`, model `jev-latest`, and a Choice question for routing. Obtain a key from [TypeSafe](https://console.typesafe.ai).
+The extension uses [pi-typesafe](https://github.com/DevMortimer/pi-typesafe)'s typed client and Choice question builder with `jev-latest`. pi-typesafe owns credentials, transport, timeouts, response validation, authentication state, and usage accounting. The router only supplies task context and routing policy, including transient-error retries.
 
-The router first reuses the key available through `pi-typesafe` (`/typesafe login` or `TYPESAFE_API_KEY`). If that API has no key, it falls back to `[routing].api_key`, which may be a literal string or command array (for example `api_key = ["fnox", "get", "THE-KEY"]`). The default command reads `TYPESAFE_API_KEY`. Each option’s thinking level controls its model’s reasoning effort.
+Authenticate with `/typesafe login` or set `TYPESAFE_API_KEY` (environment takes precedence). Obtain a key from [TypeSafe](https://console.typesafe.ai). There is no router-specific key configuration or command execution.
+
+Routing sends the latest user text (up to 16,000 characters), recent conversation text (up to 4,000 characters), and option descriptions to TypeSafe. Choosing the virtual model enables these requests independently of `/typesafe enable`, which controls only pi-typesafe's agent tool.
+
+Routing attempts, input tokens, and estimated costs are recorded in pi-typesafe's shared daily ledger and authentication outcomes update its shared auth state. `/typesafe status` shows the daily totals; its session counters describe its own client, not this router. The router imposes no practical decision limit (`Number.MAX_SAFE_INTEGER` attempts per client) and sets no daily caps. Explicit `PI_TYPESAFE_MAX_*` daily caps still apply through pi-typesafe; a reached cap surfaces an error rather than silently disabling automatic routing. Each request has pi-typesafe's default 15-second timeout. Each option’s thinking level controls its model’s reasoning effort.
+
+**Breaking change:** remove `[routing].api_key` from existing configuration files. Old key settings are rejected, not migrated.
 
 On first load, the extension creates its global configuration at
 `$PI_CODING_AGENT_DIR/extensions/pi-virtual-model/config.toml`. When
@@ -26,7 +32,6 @@ id = "auto"
 name = "Auto"
 
 [routing]
-api_key = ["printenv", "TYPESAFE_API_KEY"]
 fallback = "balanced"
 
 [routing.quick]
@@ -45,7 +50,7 @@ thinking_level = "medium"
 description = "Complex tasks that need careful reasoning."
 ```
 
-The table name is the option ID. `api_key` and `fallback` are reserved settings
+The table name is the option ID. `fallback` is the only reserved setting
 under `[routing]`. Defining options replaces the default option set; `fallback`
 must refer to a defined option. Existing configurations are preserved on startup.
 Only the configuration format shown above is supported.

@@ -4,7 +4,6 @@ id = "auto"
 name = "Auto"
 
 [routing]
-api_key = ["printenv", "TYPESAFE_API_KEY"]
 fallback = "balanced"
 
 [routing.quick]

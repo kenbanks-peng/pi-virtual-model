@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import type {
   ExtensionAPI,
@@ -6,7 +5,7 @@ import type {
   ModelRoute,
   ModelRouteRequest,
 } from "@earendil-works/pi-coding-agent";
-import { resolveApiKey } from "pi-typesafe";
+import { choice, createTypeSafe, TypeSafeIntegrationError, type TypeSafe } from "pi-typesafe";
 import { loadConfig, type RouteOption } from "./config.js";
 import { indicateRoute, registerRouteIndicator } from "./indicator.js";
 
@@ -18,7 +17,6 @@ interface RoutingState {
 
 type Request = ModelRouteRequest<RoutingState>;
 type Message = Request["messages"][number];
-type RouteChoice = RouteOption;
 const MAX_CLASSIFIER_TEXT = 16_000;
 
 function lastUserText(messages: readonly Message[]): string {
@@ -49,81 +47,37 @@ function recentContext(messages: readonly Message[]): string {
   }).filter(Boolean).join("\n").slice(-4_000);
 }
 
-function getJevApiKey(configuredKey: string | string[]): string {
-  const sharedKey = resolveApiKey("typesafe")?.key;
-  if (sharedKey) return sharedKey;
-  if (typeof configuredKey === "string") return configuredKey;
-  const [command, ...args] = configuredKey;
-  try {
-    const key = execFileSync(command, args, {
-      encoding: "utf8",
-      timeout: 10_000,
-      stdio: ["ignore", "pipe", "ignore"],
-      env: process.env,
-    }).trim();
-    if (key) return key;
-  } catch {
-    throw new Error("pi-virtual-model: Jev api_key command failed");
-  }
-  throw new Error("pi-virtual-model: Jev api_key command returned an empty value");
-}
-
-async function classifyRoute(request: Request, configuredKey: string | string[], options: readonly RouteOption[]): Promise<RouteChoice | undefined> {
-  const apiKey = getJevApiKey(configuredKey);
-
-  const fetchOptions: RequestInit = {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
+async function classifyRoute(typesafe: TypeSafe, request: Request, options: readonly RouteOption[]): Promise<RouteOption | undefined> {
+  const input = {
+    state: {
+      latest_request: lastUserText(request.messages).slice(0, MAX_CLASSIFIER_TEXT),
+      recent_context: recentContext(request.messages),
     },
-    signal: request.signal,
-    body: JSON.stringify({
-      model: "jev-latest",
-      state: {
-        latest_request: lastUserText(request.messages).slice(0, MAX_CLASSIFIER_TEXT),
-        recent_context: recentContext(request.messages),
-      },
-      questions: {
-        route: {
-          type: "choice",
-          instructions: "Choose the least demanding option that can complete latest_request reliably. Use recent_context for context. Prioritize quality and task fit, then latency and cost. Consider each option's model, thinking level, and description.",
-          criteria: Object.fromEntries(options.map((option) => [option.id, `${option.description} Model: ${option.model}. Thinking: ${option.thinkingLevel}.`])),
-        },
-      },
-    }),
+    questions: {
+      route: choice(
+        "Choose the least demanding option that can complete latest_request reliably. Use recent_context for context. Prioritize quality and task fit, then latency and cost. Consider each option's model, thinking level, and description.",
+        Object.fromEntries(options.map((option) => [option.id, `${option.description} Model: ${option.model}. Thinking: ${option.thinkingLevel}.`])),
+      ),
+    },
   };
-  let response: Response;
   for (let attempt = 0; ; attempt += 1) {
     request.signal?.throwIfAborted();
-    response = await fetch("https://api.typesafe.ai/v1/systemone", fetchOptions);
-    if (![429, 502, 503, 504, 529].includes(response.status)) break;
-    await response.body?.cancel();
-    request.signal?.throwIfAborted();
-    if (attempt === 2) return undefined;
-    await delay(250 * 2 ** attempt, undefined, { signal: request.signal });
+    try {
+      const result = await typesafe.evaluate(input, { signal: request.signal });
+      return options.find((option) => option.id === result.answers.route.choice)!;
+    } catch (error) {
+      request.signal?.throwIfAborted();
+      if (!(error instanceof TypeSafeIntegrationError) || ![429, 502, 503, 504, 529].includes(error.status ?? 0)) throw error;
+      if (attempt === 2) return undefined;
+      await delay(250 * 2 ** attempt, undefined, { signal: request.signal });
+    }
   }
-  if (!response.ok) throw new Error(`pi-virtual-model: Jev model-route failed (${response.status} ${response.statusText})`);
-
-  const payload: unknown = await response.json();
-  if (!payload || typeof payload !== "object") throw new Error("pi-virtual-model: Jev returned an invalid response");
-  const answers = (payload as { answers?: unknown }).answers;
-  const route = answers && typeof answers === "object" ? (answers as { route?: unknown }).route : undefined;
-  if (!route || typeof route !== "object" || (route as { type?: unknown }).type !== "choice") {
-    throw new Error("pi-virtual-model: Jev returned an invalid route answer");
-  }
-  const selected = (route as { choice?: unknown }).choice;
-  if (typeof selected !== "string") {
-    throw new Error(`pi-virtual-model: Jev returned an unknown model candidate: ${String(selected)}`);
-  }
-  const option = options.find((candidate) => candidate.id === selected);
-  if (!option) throw new Error(`pi-virtual-model: Jev returned an unknown model candidate: ${selected}`);
-  return option;
 }
 
 export default function virtualModelExtension(pi: ExtensionAPI): void {
   const config = loadConfig();
   registerRouteIndicator(pi);
+  let typesafe: TypeSafe | undefined;
 
   function routeTo(
     request: Request,
@@ -157,8 +111,10 @@ export default function virtualModelExtension(pi: ExtensionAPI): void {
         return routeTo(request, ctx, option, request.state);
       }
 
-      const choice = await classifyRoute(request, config.apiKey, config.options);
-      const option = choice ?? config.options.find((candidate) => candidate.id === config.fallback)!;
+      // The library requires a finite limit; do not impose a practical routing cap.
+      typesafe ??= createTypeSafe({ maxRequests: Number.MAX_SAFE_INTEGER });
+      const selected = await classifyRoute(typesafe, request, config.options);
+      const option = selected ?? config.options.find((candidate) => candidate.id === config.fallback)!;
       const state = { optionId: option.id, model: option.model, thinkingLevel: option.thinkingLevel };
       return routeTo(request, ctx, option, state);
     },

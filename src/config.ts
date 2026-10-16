@@ -14,7 +14,6 @@ export interface RouteOption {
 }
 
 export interface VirtualModelConfig {
-  apiKey: string | string[];
   provider: string;
   id: string;
   name: string;
@@ -30,7 +29,7 @@ function defaultConfig(): VirtualModelConfig {
       { id: "balanced", model: "gpt-6.1-sol", thinkingLevel: "medium", description: "General tasks that need moderate reasoning." },
       { id: "deep", model: "gpt-6-astra", thinkingLevel: "medium", description: "Complex tasks that need careful reasoning." },
     ],
-    fallback: "balanced", apiKey: ["printenv", "TYPESAFE_API_KEY"],
+    fallback: "balanced",
   };
 }
 
@@ -68,12 +67,6 @@ function parseString(value: unknown, key: string): string {
   throw new Error(`pi-virtual-model config: ${key} must be a non-empty TOML string`);
 }
 
-function parseApiKey(value: unknown): string | string[] {
-  if (typeof value === "string" && value.trim()) return value;
-  if (Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "string" && !v.includes("\0")) && value[0].trim()) return value;
-  throw new Error("pi-virtual-model config: api_key must be a non-empty string or command array of strings");
-}
-
 function validateOptions(options: RouteOption[], fallback: string): void {
   if (!options.length) throw new Error("pi-virtual-model config: options must contain at least one option");
   const ids = new Set<string>();
@@ -107,8 +100,7 @@ export function parseConfigToml(source: string): VirtualModelConfig {
   if (document.routing !== undefined) {
     const routing = table(document.routing, "routing");
     if (routing.fallback !== undefined) config.fallback = parseString(routing.fallback, "fallback");
-    if (routing.api_key !== undefined) config.apiKey = parseApiKey(routing.api_key);
-    const options = Object.entries(routing).filter(([key]) => key !== "fallback" && key !== "api_key");
+    const options = Object.entries(routing).filter(([key]) => key !== "fallback");
     if (options.length > 0) {
       config.options = options.map(([id, value]) => {
         const option = table(value, `routing.${id}`);

@@ -15,10 +15,6 @@ test("parses explicit route options and option references", () => {
 provider = 'other'
 [routing]
 fallback = "balanced"
-api_key = [
-  "printf", # command
-  'key',
-]
 [routing.quick]
 model = "small"
 thinking_level = "low"
@@ -36,7 +32,6 @@ with multiple lines"""
   assert.equal(config.options[1].model, "large");
   assert.equal(config.options[1].thinkingLevel, "medium");
   assert.equal(config.fallback, "balanced");
-  assert.deepEqual(config.apiKey, ["printf", "key"]);
 });
 
 test("rejects invalid options and unknown settings", () => {
@@ -45,6 +40,8 @@ test("rejects invalid options and unknown settings", () => {
     '[routing]\noptions = ["same|m|low|a", "same|n|high|b"]',
     '[routing]\nunknown = "value"',
     '[routing]\napi_key = []',
+    '[routing]\napi_key = "removed-key"',
+    '[routing]\napi_key = ["printenv", "TYPESAFE_API_KEY"]',
     '[unknown]',
     '[jev]\napi_key = "old-key"',
     '[routing.options.quick]\nmodel = "m"\nthinking_level = "low"\ndescription = "d"',
@@ -85,10 +82,9 @@ test("TOML syntax errors do not expose credentials", () => {
 });
 
 test("routing settings alone retain default options", () => {
-  const config = parseConfigToml('[routing]\nfallback = "quick"\napi_key = "custom-key"');
+  const config = parseConfigToml('[routing]\nfallback = "quick"');
   assert.deepEqual(config.options, parseConfigToml("").options);
   assert.equal(config.fallback, "quick");
-  assert.equal(config.apiKey, "custom-key");
 });
 
 test("custom routing tables replace the default option set", () => {
