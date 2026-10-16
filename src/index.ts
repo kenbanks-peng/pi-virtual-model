@@ -6,6 +6,7 @@ import type {
   ModelRoute,
   ModelRouteRequest,
 } from "@earendil-works/pi-coding-agent";
+import { resolveApiKey } from "pi-typesafe";
 import { loadConfig, type RouteOption } from "./config.js";
 import { indicateRoute, registerRouteIndicator } from "./indicator.js";
 
@@ -49,6 +50,8 @@ function recentContext(messages: readonly Message[]): string {
 }
 
 function getJevApiKey(configuredKey: string | string[]): string {
+  const sharedKey = resolveApiKey("typesafe")?.key;
+  if (sharedKey) return sharedKey;
   if (typeof configuredKey === "string") return configuredKey;
   const [command, ...args] = configuredKey;
   try {

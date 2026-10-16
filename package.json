@@ -1,12 +1,22 @@
 {
   "name": "@npm-ken/pi-virtual-model",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A virtual model router for Pi",
   "type": "module",
-  "keywords": ["pi-package", "pi-extension", "virtual-model", "model-router"],
-  "files": ["src", "config.toml"],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "virtual-model",
+    "model-router"
+  ],
+  "files": [
+    "src",
+    "config.toml"
+  ],
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -21,6 +31,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "pi-typesafe": "^0.10.0",
     "smol-toml": "^1.9.0"
   }
 }
